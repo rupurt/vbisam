@@ -7,9 +7,12 @@
  * Description:
  *	This module deals with the opening and closing of VBISAM files
  * Version:
- *	$Id: isopen.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
+ *	$Id: isopen.c,v 1.6 2004/01/10 16:21:27 trev_vb Exp $
  * Modification History:
  *	$Log: isopen.c,v $
+ *	Revision 1.6  2004/01/10 16:21:27  trev_vb
+ *	JvN 10Jan2004 Johann the 'super-sleuth detective' found an errant semi-colon
+ *	
  *	Revision 1.5  2004/01/06 14:31:59  trev_vb
  *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
  *	
@@ -168,7 +171,7 @@ isindexinfo (int iHandle, struct keydesc *psKeydesc, int iKeyNumber)
 	if (!psVBFile [iHandle])
 		return (-1);
 	iserrno = EBADKEY;
-	if (iKeyNumber < 0 || iKeyNumber > psVBFile [iHandle]->iNKeys);
+	if (iKeyNumber < 0 || iKeyNumber > psVBFile [iHandle]->iNKeys)
 		return (-1);
 	iserrno = 0;
 	if (iKeyNumber)
