@@ -7,11 +7,15 @@
  *	This module handles ALL the low level index file I/O operations for the
  *	VBISAM library.
  * Version:
- *	$ID$
+ *	$Id: vbIndexIO.c,v 1.2 2003/12/22 04:40:22 trev_vb Exp $
  * Modification History:
  *	$Log: vbIndexIO.c,v $
- *	Revision 1.1  2003/12/20 20:11:17  trev_vb
- *	Initial revision
+ *	Revision 1.2  2003/12/22 04:40:22  trev_vb
+ *	TvB 21Dec2003 Fixups to make freelists compatible with a commercial competitor
+ *	TvB 21Dec2003 Also, changed the cvs 'ID' header to 'Id' (Duh!)
+ *	
+ *	Revision 1.1.1.1  2003/12/20 20:11:17  trev_vb
+ *	Init import
  *	
  */
 #include	"isinternal.h"
@@ -307,15 +311,15 @@ iVBNodeFree (int iHandle, off_t tNodeNumber)
 	iserrno = 0;
 
 	memset (cNode1, 0, (size_t) psVBFile [iHandle]->iNodeSize);
-	memcpy (cNode1, "VB00", 4);
-	stint ((4 + INTSIZE), &cNode1 [4]);
+	stint (INTSIZE, cNode1);
 
 	tHeadNode = ldquad (psVBFile [iHandle]->sDictNode.cNodeFree);
 	// If the list is empty, node tNodeNumber becomes the whole list
 	if (tHeadNode == (off_t) 0)
 	{
-		memcpy (cNode1, "VB04", 4);
-		stint ((4 + (INTSIZE * 2) + QUADSIZE), &cNode1 [4]);
+		stint (INTSIZE + QUADSIZE, cNode1);
+		cNode1 [psVBFile [iHandle]->iNodeSize - 2] = 0x7f;
+		cNode1 [psVBFile [iHandle]->iNodeSize - 3] = -2;
 		//iResult = iVBNodeWrite (iHandle, (void *) cNode1, tNodeNumber);
 		iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cNode1);
 		if (iResult)
@@ -330,15 +334,18 @@ iVBNodeFree (int iHandle, off_t tNodeNumber)
 	iResult = iVBBlockRead (iHandle, TRUE, tHeadNode, cNode0);
 	if (iResult)
 		return (iResult);
-	if (memcmp (cNode0, "VB04", 4))
+	if (cNode1 [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
 		return (EBADFILE);
-	iLengthUsed = ldint (&cNode0 [4]);
-	if (iLengthUsed >= psVBFile [iHandle]->iNodeSize)
+	if (cNode1 [psVBFile [iHandle]->iNodeSize - 3] != -2)
+		return (EBADFILE);
+	iLengthUsed = ldint (cNode0);
+	if (iLengthUsed >= psVBFile [iHandle]->iNodeSize - (QUADSIZE + 3))
 	{
 		// If there was no space left, tNodeNumber becomes the head
-		memcpy (cNode1, "VB04", 4);
-		stint ((4 + (INTSIZE * 2) + QUADSIZE), &cNode1 [4]);
-		stquad (tHeadNode, &cNode1 [4 + (INTSIZE * 2)]);
+		cNode1 [psVBFile [iHandle]->iNodeSize - 2] = 0x7f;
+		cNode1 [psVBFile [iHandle]->iNodeSize - 3] = -2;
+		stint (INTSIZE + QUADSIZE, cNode1);
+		stquad (tHeadNode, &cNode1 [INTSIZE]);
 		//iResult = iVBNodeWrite (iHandle, (void *) cNode1, tNodeNumber);
 		iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cNode1);
 		if (!iResult)
@@ -356,7 +363,7 @@ iVBNodeFree (int iHandle, off_t tNodeNumber)
 		return (iResult);
 	stquad (tNodeNumber, &cNode0 [iLengthUsed]);
 	iLengthUsed += QUADSIZE;
-	stint (iLengthUsed, &cNode0 [4]);
+	stint (iLengthUsed, cNode0);
 	//iResult = iVBNodeWrite (iHandle, (void *) cNode0, tHeadNode);
 	iResult = iVBBlockWrite (iHandle, TRUE, tHeadNode, cNode0);
 
@@ -406,15 +413,17 @@ iVBDataFree (int iHandle, off_t tRowNumber)
 		iResult = iVBBlockRead (iHandle, TRUE, tHeadNode, cNode0);
 		if (iResult)
 			return (iResult);
-		if (memcmp (cNode0, "VB04", 4))
+		if (cNode0 [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
 			return (EBADFILE);
-		iLengthUsed = ldint (&cNode0 [4]);
-		if (iLengthUsed < psVBFile [iHandle]->iNodeSize)
+		if (cNode0 [psVBFile [iHandle]->iNodeSize - 3] != -1)
+			return (EBADFILE);
+		iLengthUsed = ldint (cNode0);
+		if (iLengthUsed < psVBFile [iHandle]->iNodeSize - (QUADSIZE + 3))
 		{
 			// We need to add tRowNumber to the current node
 			stquad ((off_t) tRowNumber, &cNode0 [iLengthUsed]);
 			iLengthUsed += QUADSIZE;
-			stint (iLengthUsed, &cNode0 [4]);
+			stint (iLengthUsed, cNode0);
 			//iResult = iVBNodeWrite (iHandle, (void *) cNode0, tHeadNode);
 			iResult = iVBBlockWrite (iHandle, TRUE, tHeadNode, cNode0);
 			return (iResult);
@@ -426,10 +435,11 @@ iVBDataFree (int iHandle, off_t tRowNumber)
 	if (tNodeNumber == (off_t) -1)
 		return (iserrno);
 	memset (cNode0, 0, MAX_NODE_LENGTH);
-	memcpy (cNode0, "VB04", 4);
-	stint (4 + (INTSIZE * 2) + QUADSIZE + QUADSIZE, &cNode0 [4]);
-	stquad (tHeadNode, &cNode0 [4 + (INTSIZE * 2)]);
-	stquad (tRowNumber, &cNode0 [4 + (INTSIZE * 2) + QUADSIZE]);
+	cNode0 [psVBFile [iHandle]->iNodeSize - 2] = 0x7f;
+	cNode0 [psVBFile [iHandle]->iNodeSize - 3] = -1;
+	stint (2 + (2 * QUADSIZE), cNode0);
+	stquad (tHeadNode, &cNode0 [INTSIZE]);
+	stquad (tRowNumber, &cNode0 [INTSIZE + QUADSIZE]);
 	//iResult = iVBNodeWrite (iHandle, (void *) cNode0, tNodeNumber);
 	iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cNode0);
 	if (iResult)
