@@ -10,9 +10,12 @@
  *	within this module, it becomes easier to 'virtualize' the filesystem
  *	at a later date.
  * Version:
- *	$Id: vbLowLevel.c,v 1.9 2004/06/13 07:52:17 trev_vb Exp $
+ *	$Id: vbLowLevel.c,v 1.10 2004/06/22 09:54:27 trev_vb Exp $
  * Modification History:
  *	$Log: vbLowLevel.c,v $
+ *	Revision 1.10  2004/06/22 09:54:27  trev_vb
+ *	22June2004 TvB Ooops, I put some code in iVBLock BEFORE the var declarations
+ *	
  *	Revision 1.9  2004/06/13 07:52:17  trev_vb
  *	TvB 13June2004
  *	Implemented sharing of open files.
@@ -295,17 +298,17 @@ tVBWrite (int iHandle, void *pvBuffer, size_t tCount)
 int
 iVBLock (int iHandle, off_t tOffset, off_t tLength, int iMode)
 {
-	if (!sVBFile [iHandle].iRefCount)
-	{
-		errno = ENOENT;
-		return (-1);
-	}
 	int	iCommand,
 		iType,
 		iResult = -1;
 	struct	flock
 		sFlock;
 
+	if (!sVBFile [iHandle].iRefCount)
+	{
+		errno = ENOENT;
+		return (-1);
+	}
 	switch (iMode)
 	{
 	case	VBUNLOCK:
