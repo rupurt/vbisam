@@ -1,3 +1,17 @@
+# Title:	Makefile
+# Copyright:	(C) 2003 Trevor van Bremen
+# Author:	Trevor van Bremen
+# Created:	11Dec2003
+# Description:
+#	This is the main makefile that BUILDS all this stuff (I hope)
+# Version:
+#	$Id: Makefile,v 1.2 2003/12/22 04:42:50 trev_vb Exp $
+# Modification History:
+#	$Log: Makefile,v $
+#	Revision 1.2  2003/12/22 04:42:50  trev_vb
+#	TvB 21Dec2003 Added in a cvs header section
+#	
+#
 SHELL	= /bin/sh
 DEPS	= isinternal.h vbisam.h Makefile
 LIB	= vbisam
@@ -40,7 +54,7 @@ SRCS	= \
 	vbMemIO.c
 OBJS	= ${SRCS:.c=.o}
 
-all:	${ALB} ${SLB} IsamTest CvtTo64
+all:	${ALB} ${SLB} IsamTest
 
 .o:
 	cc $(CFLAGS) -o $@ $< -l$(LIB)
