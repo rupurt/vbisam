@@ -7,9 +7,13 @@
  * Description:
  *	This module deals with the opening and closing of VBISAM files
  * Version:
- *	$Id: isopen.c,v 1.10 2004/06/13 07:52:17 trev_vb Exp $
+ *	$Id: isopen.c,v 1.11 2004/06/16 10:53:55 trev_vb Exp $
  * Modification History:
  *	$Log: isopen.c,v $
+ *	Revision 1.11  2004/06/16 10:53:55  trev_vb
+ *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
+ *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
+ *	
  *	Revision 1.10  2004/06/13 07:52:17  trev_vb
  *	TvB 13June2004
  *	Implemented sharing of open files.
@@ -176,10 +180,6 @@ iVBClose2 (int iHandle)
 	psVBFile [iHandle]->iDataHandle = -1;
 	if (iVBClose (psVBFile [iHandle]->iIndexHandle))
 		iserrno = errno;
-	psVBFile [iHandle]->iIndexHandle = -1;
-	psVBFile [iHandle]->tRowNumber = -1;
-	psVBFile [iHandle]->tDupNumber = -1;
-	psVBFile [iHandle]->iIsOpen = 2;	// Only buffers remain!
 	while (sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead)
 	{
 		psRowLock = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead->psNext;
@@ -187,6 +187,10 @@ iVBClose2 (int iHandle)
 		sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead = psRowLock;
 	}
 	sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail = VBLOCK_NULL;
+	psVBFile [iHandle]->iIndexHandle = -1;
+	psVBFile [iHandle]->tRowNumber = -1;
+	psVBFile [iHandle]->tDupNumber = -1;
+	psVBFile [iHandle]->iIsOpen = 2;	// Only buffers remain!
 	psVBFile [iHandle]->sFlags.iTransYet = 0;
 	for (iLoop = 0; iLoop < MAXSUBS; iLoop++)
 		psVBFile [iHandle]->psKeyCurr [iLoop] = VBKEY_NULL;
@@ -625,7 +629,7 @@ tCountRows (int iHandle)
 		if (iVBBlockRead (iHandle, TRUE, tNodeNumber, cVBNode [0]))
 			return (-1);
 		iNodeUsed = ldint (cVBNode [0]);
-		iNodeUsed = INTSIZE + QUADSIZE;
+		iNodeUsed -= INTSIZE + QUADSIZE;
 		tDataCount -= (iNodeUsed / QUADSIZE);
 		tNodeNumber = ldquad (cVBNode [0] + INTSIZE);
 	}

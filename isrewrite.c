@@ -8,9 +8,13 @@
  *	This is the module that deals with all the rewriting to a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isrewrite.c,v 1.6 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: isrewrite.c,v 1.7 2004/06/16 10:53:56 trev_vb Exp $
  * Modification History:
  *	$Log: isrewrite.c,v $
+ *	Revision 1.7  2004/06/16 10:53:56  trev_vb
+ *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
+ *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
+ *	
  *	Revision 1.6  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -70,7 +74,6 @@ isrewrite (int iHandle, char *pcRow)
 	iResult = iVBEnter (iHandle, TRUE);
 	if (iResult)
 		return (-1);
-
 	if (psVBFile [iHandle]->iOpenMode & ISVARLEN && (isreclen > psVBFile [iHandle]->iMaxRowLength || isreclen < psVBFile [iHandle]->iMinRowLength))
 	{
 		iserrno = EBADARG;
@@ -79,7 +82,10 @@ isrewrite (int iHandle, char *pcRow)
 
 	iNewRecLen = isreclen;
 	if (psVBFile [iHandle]->psKeydesc [0]->iFlags & ISDUPS)
+	{
+		iResult = -1;
 		iserrno = ENOREC;
+	}
 	else
 	{
 		vVBMakeKey (iHandle, 0, pcRow, cKeyValue);
@@ -92,7 +98,7 @@ isrewrite (int iHandle, char *pcRow)
 			tRowNumber = psVBFile [iHandle]->psKeyCurr [0]->tRowNode;
 			if (psVBFile [iHandle]->iOpenMode & ISTRANS)
 			{
-				iserrno = iVBDataLock (iHandle, VBWRLOCK, tRowNumber, TRUE);
+				iserrno = iVBDataLock (iHandle, VBWRLOCK, tRowNumber);
 				if (iserrno)
 				{
 					iResult = -1;
@@ -106,6 +112,7 @@ isrewrite (int iHandle, char *pcRow)
 				iResult = -1;
 			else
 				iOldRecLen = isreclen;
+
 			if (!iResult)
 				iResult = iRowUpdate (iHandle, pcRow, tRowNumber);
 			if (!iResult)
@@ -114,7 +121,13 @@ isrewrite (int iHandle, char *pcRow)
 				isreclen = iNewRecLen;
 				iResult = iVBDataWrite (iHandle, (void *) pcRow, FALSE, isrecnum, TRUE);
 			}
-			iVBTransUpdate (iHandle, tRowNumber, iOldRecLen, iNewRecLen, pcRow);	// BUG - retval
+			if (!iResult)
+			{
+				if (psVBFile [iHandle]->iOpenMode & ISVARLEN)
+					iResult = iVBTransUpdate (iHandle, tRowNumber, iOldRecLen, iNewRecLen, pcRow);
+				else
+					iResult = iVBTransUpdate (iHandle, tRowNumber, psVBFile [iHandle]->iMinRowLength, psVBFile [iHandle]->iMinRowLength, pcRow);
+			}
 			break;
 
 		case	0:		// LESS than
@@ -132,7 +145,7 @@ isrewrite (int iHandle, char *pcRow)
 	}
 
 ISRewriteExit:
-	iVBExit (iHandle);
+	iResult |= iVBExit (iHandle);
 	return (iResult);
 }
 
@@ -175,7 +188,7 @@ isrewcurr (int iHandle, char *pcRow)
 	{
 		if (psVBFile [iHandle]->iOpenMode & ISTRANS)
 		{
-			iserrno = iVBDataLock (iHandle, VBWRLOCK, psVBFile [iHandle]->tRowNumber, TRUE);
+			iserrno = iVBDataLock (iHandle, VBWRLOCK, psVBFile [iHandle]->tRowNumber);
 			if (iserrno)
 			{
 				iResult = -1;
@@ -197,11 +210,17 @@ isrewcurr (int iHandle, char *pcRow)
 			isreclen = iNewRecLen;
 			iResult = iVBDataWrite (iHandle, (void *) pcRow, FALSE, isrecnum, TRUE);
 		}
-		iVBTransUpdate (iHandle, psVBFile [iHandle]->tRowNumber, iOldRecLen, iNewRecLen, pcRow);	// BUG - retval
+		if (!iResult)
+		{
+			if (psVBFile [iHandle]->iOpenMode & ISVARLEN)
+				iResult = iVBTransUpdate (iHandle, psVBFile [iHandle]->tRowNumber, iOldRecLen, iNewRecLen, pcRow);
+			else
+				iResult = iVBTransUpdate (iHandle, psVBFile [iHandle]->tRowNumber, psVBFile [iHandle]->iMinRowLength, psVBFile [iHandle]->iMinRowLength, pcRow);
+		}
 	}
 ISRewcurrExit:
 	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
-	iVBExit (iHandle);
+	iResult |= iVBExit (iHandle);
 	return (iResult);
 }
 
@@ -243,13 +262,13 @@ isrewrec (int iHandle, off_t tRowNumber, char *pcRow)
 	if (tRowNumber < 1)
 	{
 		iResult = -1;
-		iserrno = EBADARG;
+		iserrno = ENOREC;
 	}
 	else
 	{
 		if (psVBFile [iHandle]->iOpenMode & ISTRANS)
 		{
-			iserrno = iVBDataLock (iHandle, VBWRLOCK, tRowNumber, TRUE);
+			iserrno = iVBDataLock (iHandle, VBWRLOCK, tRowNumber);
 			if (iserrno)
 			{
 				iResult = -1;
@@ -271,11 +290,18 @@ isrewrec (int iHandle, off_t tRowNumber, char *pcRow)
 			isreclen = iNewRecLen;
 			iResult = iVBDataWrite (iHandle, (void *) pcRow, FALSE, isrecnum, TRUE);
 		}
-		iVBTransUpdate (iHandle, tRowNumber, iOldRecLen, iNewRecLen, pcRow);	// BUG - retval
+		if (!iResult)
+		{
+			if (psVBFile [iHandle]->iOpenMode & ISVARLEN)
+				iResult = iVBTransUpdate (iHandle, tRowNumber, iOldRecLen, iNewRecLen, pcRow);
+			else
+				iResult = iVBTransUpdate (iHandle, tRowNumber, psVBFile [iHandle]->iMinRowLength, psVBFile [iHandle]->iMinRowLength, pcRow);
+		}
 	}
 ISRewrecExit:
-	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
-	iVBExit (iHandle);
+	if (!iResult)
+		psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
+	iResult |= iVBExit (iHandle);
 	return (iResult);
 }
 
@@ -350,8 +376,10 @@ iRowUpdate (int iHandle, char *pcRow, off_t tRowNumber)
 	{
 		if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iNParts == 0)
 			continue;
+		// pcRow is the UPDATED key!
 		vVBMakeKey (iHandle, iKeyNumber, pcRow, cKeyValue);
 		iResult = memcmp (cKeyValue, psVBFile [iHandle]->psKeyCurr [iKeyNumber]->cKey, psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength);
+		// If NEW key is DIFFERENT than CURRENT, remove CURRENT
 		if (iResult)
 			iResult = iVBKeyDelete (iHandle, iKeyNumber);
 		else
@@ -366,18 +394,24 @@ iRowUpdate (int iHandle, char *pcRow, off_t tRowNumber)
 				iKeyNumber--;
 				vVBMakeKey (iHandle, iKeyNumber, *(psVBFile [iHandle]->ppcRowBuffer), cKeyValue);
 			}
-			iserrno = iResult;
+			iserrno = EBADFILE;
 			return (-1);
 		}
+		iResult = iVBKeySearch (iHandle, ISGREAT, iKeyNumber, 0, cKeyValue, 0);
 		tDupNumber = 0;
-		if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iFlags & ISDUPS)
-		{
-			if (!iVBKeyLoad (iHandle, iKeyNumber, ISPREV, FALSE, &psKey) && !memcmp (psKey->cKey, cKeyValue, psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength))
-				tDupNumber = psKey->tDupNumber + 1;
-		}
-		iResult = iVBKeySearch (iHandle, ISGREAT, iKeyNumber, 0, cKeyValue, tDupNumber + 1);
 		if (iResult >= 0)
+		{
+			iResult = iVBKeyLoad (iHandle, iKeyNumber, ISPREV, TRUE, &psKey);
+			if (!iResult)
+			{
+				if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iFlags & ISDUPS && !memcmp (psKey->cKey, cKeyValue, psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength))
+					tDupNumber = psKey->tDupNumber + 1;
+				psVBFile [iHandle]->psKeyCurr [iKeyNumber] = psVBFile [iHandle]->psKeyCurr [iKeyNumber]->psNext;
+				psVBFile [iHandle]->psKeyCurr [iKeyNumber]->psParent->psKeyCurr = psVBFile [iHandle]->psKeyCurr [iKeyNumber];
+			}
+			iResult = iVBKeySearch (iHandle, ISGTEQ, iKeyNumber, 0, cKeyValue, tDupNumber);
 			iResult = iVBKeyInsert (iHandle, VBTREE_NULL, iKeyNumber, cKeyValue, tRowNumber, tDupNumber, VBTREE_NULL);
+		}
 		if (iResult)
 		{
 		// Eeek, an error occured.  Let's remove what we added

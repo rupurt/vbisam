@@ -7,9 +7,13 @@
  * Description:
  *	This module tests a bunch of the features of VBISAM
  * Version:
- *	$Id: MVTest.c,v 1.3 2004/06/13 06:32:33 trev_vb Exp $
+ *	$Id: MVTest.c,v 1.4 2004/06/16 10:53:55 trev_vb Exp $
  * Modification History:
  *	$Log: MVTest.c,v $
+ *	Revision 1.4  2004/06/16 10:53:55  trev_vb
+ *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
+ *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
+ *	
  *	Revision 1.3  2004/06/13 06:32:33  trev_vb
  *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
  *	
@@ -65,14 +69,15 @@ main (int iArgc, char **ppcArgv)
 	if (iArgc > 1 && strcmp (ppcArgv [1], "create") == 0)
 	{
 		iserase (cFileName);
-		iHandle = isbuild (cFileName, 256, &sKeydesc, ISINOUT+ISFIXLEN+ISEXCLLOCK);
+		iHandle = isbuild (cFileName, 255, &sKeydesc, ISINOUT+ISFIXLEN+ISEXCLLOCK);
 		if (iHandle < 0)
 		{
 			fprintf (stdout, "Error creating database: %d\n", iserrno);
 			exit (-1);
 		}
 		sKeydesc.k_flags |= ISDUPS;
-		for (sKeydesc.k_start = 1; sKeydesc.k_start < MAXSUBS / 8; sKeydesc.k_start++)
+		//for (sKeydesc.k_start = 1; sKeydesc.k_start < MAXSUBS; sKeydesc.k_start++)
+		for (sKeydesc.k_start = 1; sKeydesc.k_start < 2; sKeydesc.k_start++)
 			if (isaddindex (iHandle, &sKeydesc))
 				printf ("Error adding index %d\n", sKeydesc.k_start);
 		isclose (iHandle);
@@ -115,7 +120,7 @@ main (int iArgc, char **ppcArgv)
 			for (iLoop3 = 0; iLoop3 < 256; iLoop3++)
 				cRecord [iLoop3] = rand () % 256;
 
-			switch (rand () % 2)
+			switch (rand () % 4)
 			{
 			case	0:
 				if ((iResult = iswrite (iHandle, (char *) cRecord)) != 0)
@@ -192,7 +197,6 @@ main (int iArgc, char **ppcArgv)
 			exit (-1);
 		}
 
-		//TvB switch (rand () % 1)
 		switch (rand () % 2)
 		{
 		case	0:

@@ -7,9 +7,13 @@
  * Description:
  *	This program tests and if needed, rebuilds indexes
  * Version:
- *	$Id: vbCheck.c,v 1.2 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: vbCheck.c,v 1.3 2004/06/16 10:53:56 trev_vb Exp $
  * Modification History:
  *	$Log: vbCheck.c,v $
+ *	Revision 1.3  2004/06/16 10:53:56  trev_vb
+ *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
+ *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
+ *	
  *	Revision 1.2  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -147,7 +151,7 @@ iPreamble (iHandle)
 		return (-1);
 	}
 
-	if (fstat (psVBFile [iHandle]->iDataHandle, &sStat))
+	if (fstat (sVBFile [psVBFile [iHandle]->iDataHandle].iHandle, &sStat))
 	{
 		printf ("Unable to get data status!\n");
 		return (-1);
@@ -170,7 +174,7 @@ iPreamble (iHandle)
 	}
 	memset (gpsDataMap [0], 0, (int) ((gtDataSize + 7) / 8));
 
-	if (fstat (psVBFile [iHandle]->iIndexHandle, &sStat))
+	if (fstat (sVBFile [psVBFile [iHandle]->iIndexHandle].iHandle, &sStat))
 	{
 		printf ("Unable to get index status!\n");
 		return (-1);
@@ -425,6 +429,12 @@ iCheckTree (int iHandle, int iKey, off_t tNode, int iLevel)
 		if (sTree.psKeyList [iLoop]->sFlags.iIsDummy)
 			continue;
 		if (iLoop > 0 && iVBKeyCompare (iHandle, iKey, 0, sTree.psKeyList [iLoop - 1]->cKey, sTree.psKeyList [iLoop]->cKey) > 0)
+		{
+			printf ("Index is out of order!\n");
+			vVBKeyAllFree (iHandle, iKey, &sTree);
+			return (1);
+		}
+		if (iLoop > 0 && iVBKeyCompare (iHandle, iKey, 0, sTree.psKeyList [iLoop - 1]->cKey, sTree.psKeyList [iLoop]->cKey) == 0 && sTree.psKeyList [iLoop - 1]->tDupNumber >= sTree.psKeyList [iLoop]->tDupNumber)
 		{
 			printf ("Index is out of order!\n");
 			vVBKeyAllFree (iHandle, iKey, &sTree);

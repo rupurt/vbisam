@@ -8,9 +8,13 @@
  *	This is the module that deals with all the writing to a file in the
  *	VBISAM library.
  * Version:
- *	$Id: iswrite.c,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: iswrite.c,v 1.8 2004/06/16 10:53:56 trev_vb Exp $
  * Modification History:
  *	$Log: iswrite.c,v $
+ *	Revision 1.8  2004/06/16 10:53:56  trev_vb
+ *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
+ *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
+ *	
  *	Revision 1.7  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -167,7 +171,7 @@ iVBWriteRow (int iHandle, char *pcRow, off_t tRowNumber)
 	isrecnum = tRowNumber;
 	if (psVBFile [iHandle]->iOpenMode & ISTRANS)
 	{
-		iserrno = iVBDataLock (iHandle, VBWRLOCK, tRowNumber, TRUE);
+		iserrno = iVBDataLock (iHandle, VBWRLOCK, tRowNumber);
 		if (iserrno)
 			return (-1);
 	}
@@ -180,17 +184,18 @@ iVBWriteRow (int iHandle, char *pcRow, off_t tRowNumber)
 		if (iResult)
 		{
 			iserrno = iResult;
-			iVBDataLock (iHandle, VBUNLOCK, tRowNumber, TRUE);
+			if (psVBFile [iHandle]->iOpenMode & ISTRANS)
+				iVBDataLock (iHandle, VBUNLOCK, tRowNumber);
 			return (-1);
 		}
 	}
 	if (!iResult)
+	{
 		if (psVBFile [iHandle]->iOpenMode & ISVARLEN)
 			iResult = iVBTransInsert (iHandle, tRowNumber, isreclen, pcRow);
 		else
 			iResult = iVBTransInsert (iHandle, tRowNumber, psVBFile [iHandle]->iMinRowLength, pcRow);
-	else
-		iVBDataLock (iHandle, VBUNLOCK, tRowNumber, TRUE);
+	}
 	return (iResult);
 }
 

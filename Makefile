@@ -5,9 +5,13 @@
 # Description:
 #	This is the main makefile that BUILDS all this stuff (I hope)
 # Version:
-#	$Id: Makefile,v 1.11 2004/06/13 07:52:17 trev_vb Exp $
+#	$Id: Makefile,v 1.12 2004/06/16 10:53:55 trev_vb Exp $
 # Modification History:
 #	$Log: Makefile,v $
+#	Revision 1.12  2004/06/16 10:53:55  trev_vb
+#	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
+#	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
+#	
 #	Revision 1.11  2004/06/13 07:52:17  trev_vb
 #	TvB 13June2004
 #	Implemented sharing of open files.
@@ -98,7 +102,7 @@ SRCS	= \
 	vbVarLenIO.c
 OBJS	= ${SRCS:.c=.o}
 
-all:	${ALB} ${SLB} vbCheck vbRecover MVTest
+all:	${ALB} ${SLB} vbCheck vbIndexEdit vbRecover MVTest
 
 .o:
 	$(CC) $(CFLAGS) -o $@ $< -l$(LIB)
@@ -119,6 +123,10 @@ clean:
 vbCheck:	vbCheck.o ${SLB}
 
 vbCheck.o:	vbCheck.c ${DEPS}
+
+vbIndexEdit:	vbIndexEdit.o ${SLB}
+
+vbIndexEdit.o:	vbIndexEdit.c ${DEPS}
 
 vbRecover:	vbRecover.o ${SLB}
 

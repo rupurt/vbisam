@@ -8,9 +8,13 @@
  *	This module handles the locking on both the index and data files for the
  *	VBISAM library.
  * Version:
- *	$Id: vbLocking.c,v 1.8 2004/06/13 07:52:17 trev_vb Exp $
+ *	$Id: vbLocking.c,v 1.9 2004/06/16 10:53:56 trev_vb Exp $
  * Modification History:
  *	$Log: vbLocking.c,v $
+ *	Revision 1.9  2004/06/16 10:53:56  trev_vb
+ *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
+ *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
+ *	
  *	Revision 1.8  2004/06/13 07:52:17  trev_vb
  *	TvB 13June2004
  *	Implemented sharing of open files.
@@ -47,9 +51,9 @@ int	iVBEnter (int, int);
 int	iVBExit (int);
 int	iVBForceExit (int);
 int	iVBFileOpenLock (int, int);
-int	iVBDataLock (int, int, off_t, int);
-static	int	iVBLockInsert (int, off_t, int);
-static	int	iVBLockDelete (int, off_t, int);
+int	iVBDataLock (int, int, off_t);
+static	int	iLockInsert (int, off_t);
+static	int	iLockDelete (int, off_t);
 
 /*
  *	Overview
@@ -119,8 +123,13 @@ iVBEnter (int iHandle, int iModifying)
 		iserrno = ENOTOPEN;
 		return (-1);
 	}
+	if (psVBFile [iHandle]->iOpenMode & ISTRANS && iVBInTrans == VBNOTRANS)
+	{
+		iserrno = ENOTRANS;
+		return (-1);
+	}
 	psVBFile [iHandle]->sFlags.iIndexChanged = 0;
-	if ((psVBFile [iHandle]->iOpenMode & ISEXCLLOCK))
+	if (psVBFile [iHandle]->iOpenMode & ISEXCLLOCK)
 		return (0);
 	if (psVBFile [iHandle]->sFlags.iIsDictLocked & 0x03)
 	{
@@ -233,9 +242,6 @@ iVBExit (int iHandle)
 		else
 			iVBBufferLevel = 4;
 	}
-#ifdef	DEBUG
-	iChkTree (iHandle);
-#endif	// DEBUG
 	for (iLoop2 = 0; iLoop2 < psVBFile [iHandle]->iNKeys; iLoop2++)
 	{
 		struct	VBKEY
@@ -391,7 +397,7 @@ iVBFileOpenLock (int iHandle, int iMode)
 
 /*
  * Name:
- *	int	iVBDataLock (int iHandle, int iMode, off_t tRowNumber, int iIsTransaction);
+ *	int	iVBDataLock (int iHandle, int iMode, off_t tRowNumber);
  * Arguments:
  *	int	iHandle
  *		The open file descriptor of the VBISAM file (Not the idx file)
@@ -402,8 +408,6 @@ iVBFileOpenLock (int iHandle, int iMode)
  *	off_t	tRowNumber
  *		The row number to be (un)locked
  *		If zero, then this is a file-wide (un)lock
- *	int	iIsTransaction
- *		If set, then this lock is a transactional lock
  * Prerequisites:
  *	NONE
  * Returns:
@@ -415,11 +419,12 @@ iVBFileOpenLock (int iHandle, int iMode)
  *	NONE known
  */
 int
-iVBDataLock (int iHandle, int iMode, off_t tRowNumber, int iIsTransaction)
+iVBDataLock (int iHandle, int iMode, off_t tRowNumber)
 {
-	int	iResult;
+	int	iResult = 0;
 	struct	VBLOCK
-		*psLock;
+		*psLock,
+		*psLockNext;
 	off_t	tLength = 1,
 		tOffset;
 
@@ -431,19 +436,16 @@ iVBDataLock (int iHandle, int iMode, off_t tRowNumber, int iIsTransaction)
 	if (psVBFile [iHandle]->iOpenMode & ISEXCLLOCK)
 		return (0);
 	/*
-	 * If this is a FILE lock (row = 0), then we may as well free up any
-	 * other existing locks.
-	 * BUG: What if some of those locks were within a transaction?
+	 * If this is a FILE (un)lock (row = 0), then we may as well free ALL
+	 * locks. Even if CISAMLOCKS is set, we do this!
 	 */
 	if (tRowNumber == 0)
 	{
-		while (sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead)
+		for (psLock = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead; psLock; psLock = psLockNext)
 		{
-			psLock = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead->psNext;
-			vVBLockFree (sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead);
-			sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead = psLock;
+			psLockNext = psLock->psNext;
+			iVBDataLock (iHandle, VBUNLOCK, psLock->tRowNumber);
 		}
-		sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead;
 		memset (cVBNode [0], 0xff, QUADSIZE);
 		cVBNode [0] [0] = 0x3f;
 		tLength = ldquad (cVBNode [0]);
@@ -452,14 +454,9 @@ iVBDataLock (int iHandle, int iMode, off_t tRowNumber, int iIsTransaction)
 		else
 			psVBFile [iHandle]->sFlags.iIsDataLocked = TRUE;
 	}
-	/*
-	 * A one byte row lock can be merged with previous / next row locks
-	 * in the kernel in order to save on consuming valuable system locks
-	 */
-	if (iMode == VBUNLOCK && tRowNumber)
-		iResult = iVBLockDelete (iHandle, tRowNumber, iIsTransaction);
 	else
-		iResult = 0;
+		if (iMode == VBUNLOCK)
+			iResult = iLockDelete (iHandle, tRowNumber);
 	if (!iResult)
 	{
 		memset (cVBNode [0], 0x00, QUADSIZE);
@@ -470,21 +467,18 @@ iVBDataLock (int iHandle, int iMode, off_t tRowNumber, int iIsTransaction)
 			return (ELOCKED);
 	}
 	if (iMode != VBUNLOCK && tRowNumber)
-		return (iVBLockInsert (iHandle, tRowNumber, iIsTransaction));
+		return (iLockInsert (iHandle, tRowNumber));
 	return (iResult);
 }
 
 /*
  * Name:
- *	static	int	iVBLockInsert (int iHandle, off_t tRowNumber, int iIsTransaction);
+ *	static	int	iLockInsert (int iHandle, off_t tRowNumber);
  * Arguments:
  *	int	iHandle
  *		The open file descriptor of the VBISAM file (Not the idx file)
  *	off_t	tRowNumber
  *		The row number to be added to the files lock list
- *	int	iIsTransaction
- *		If TRUE, then this rowlock is flagged such that it doesn't get
- *		unlocked except by a iscommit () / isrollback ()
  * Prerequisites:
  *	NONE
  * Returns:
@@ -494,7 +488,7 @@ iVBDataLock (int iHandle, int iMode, off_t tRowNumber, int iIsTransaction)
  *	NONE known
  */
 static	int
-iVBLockInsert (int iHandle, off_t tRowNumber, int iIsTransaction)
+iLockInsert (int iHandle, off_t tRowNumber)
 {
 	struct	VBLOCK
 		*psNewLock = VBLOCK_NULL,
@@ -502,13 +496,12 @@ iVBLockInsert (int iHandle, off_t tRowNumber, int iIsTransaction)
 
 	psLock = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead;
 	// Insertion at head of list
-	if (psLock == VBLOCK_NULL || iIsTransaction < psLock->iIsTransaction || tRowNumber < psLock->tRowNumber)
+	if (psLock == VBLOCK_NULL || tRowNumber < psLock->tRowNumber)
 	{
 		psNewLock = psVBLockAllocate (iHandle);
 		if (psNewLock == VBLOCK_NULL)
 			return (errno);
 		psNewLock->iHandle = iHandle;
-		psNewLock->iIsTransaction = iIsTransaction;
 		psNewLock->tRowNumber = tRowNumber;
 		psNewLock->psNext = psLock;
 		sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead = psNewLock;
@@ -517,67 +510,36 @@ iVBLockInsert (int iHandle, off_t tRowNumber, int iIsTransaction)
 		return (0);
 	}
 	// Insertion at tail of list
-	if (iIsTransaction >= sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail->iIsTransaction && tRowNumber > sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail->tRowNumber)
+	if (tRowNumber > sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail->tRowNumber)
 	{
 		psNewLock = psVBLockAllocate (iHandle);
 		if (psNewLock == VBLOCK_NULL)
 			return (errno);
 		psNewLock->iHandle = iHandle;
-		psNewLock->iIsTransaction = iIsTransaction;
 		psNewLock->tRowNumber = tRowNumber;
 		sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail->psNext = psNewLock;
 		sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail = psNewLock;
 		return (0);
 	}
 	// Position psLock to insertion point (Keep in mind, we insert AFTER)
-	while (psLock->psNext && iIsTransaction >= psLock->psNext->iIsTransaction && tRowNumber > psLock->psNext->tRowNumber)
-	{
-		// Are we promoting a non-transactional lock to transactional?
-		if (tRowNumber == psLock->psNext->tRowNumber)
-		{
-#ifdef	CISAMLOCKS
-			if (psLock->iHandle != iHandle)
-				return (ELOCKED);	// Table granular lock!
-#endif	// CISAMLOCKS
-			// Is it already 'correct'?
-			if (iIsTransaction == psLock->psNext->iIsTransaction)
-				return (0);	// Already OK!
-			else
-			{
-				// Are we promoting the tail?
-				if (psLock->psNext == sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail)
-				{
-					psLock->psNext->iIsTransaction = iIsTransaction;
-					return (0);
-				}
-				psNewLock = psLock->psNext;
-				psLock->psNext = psNewLock->psNext;
-			}
-		}
+	while (psLock->psNext && tRowNumber > psLock->psNext->tRowNumber)
 		psLock = psLock->psNext;
-	}
-	if (psLock->iIsTransaction == iIsTransaction && psLock->tRowNumber == tRowNumber)
+	// Already locked?
+	if (psLock->tRowNumber == tRowNumber)
 	{
-#ifdef	CISAMLOCKS
-		return (0);
-#else	// CISAMLOCKS
 		if (psLock->iHandle == iHandle)
 			return (0);
 		else
+#ifdef	CISAMLOCKS
+			return (0);
+#else	// CISAMLOCKS
 			return (ELOCKED);
 #endif	// CISAMLOCKS
 	}
-	if (!psNewLock)
-		psNewLock = psVBLockAllocate (iHandle);
-#ifndef	CISAMLOCKS
-	else
-		if (psNewLock->iHandle != iHandle)
-			return (ELOCKED);
-#endif	// CISAMLOCKS
+	psNewLock = psVBLockAllocate (iHandle);
 	if (psNewLock == VBLOCK_NULL)
 		return (errno);
-	psLock->iHandle = iHandle;
-	psNewLock->iIsTransaction = iIsTransaction;
+	psNewLock->iHandle = iHandle;
 	psNewLock->tRowNumber = tRowNumber;
 	// Insert psNewLock AFTER psLock
 	psNewLock->psNext = psLock->psNext;
@@ -588,14 +550,12 @@ iVBLockInsert (int iHandle, off_t tRowNumber, int iIsTransaction)
 
 /*
  * Name:
- *	static	int	iVBLockDelete (int iHandle, off_t tRowNumber, int iIsTransaction);
+ *	static	int	iLockDelete (int iHandle, off_t tRowNumber);
  * Arguments:
  *	int	iHandle
  *		The open file descriptor of the VBISAM file (Not the idx file)
  *	off_t	tRowNumber
  *		The row number to be removed from the files lock list
- *	int	iIsTransaction
- *		If set, then this lock is a transactional unlock
  * Prerequisites:
  *	NONE
  * Returns:
@@ -605,24 +565,22 @@ iVBLockInsert (int iHandle, off_t tRowNumber, int iIsTransaction)
  *	NONE known
  */
 static	int
-iVBLockDelete (int iHandle, off_t tRowNumber, int iIsTransaction)
+iLockDelete (int iHandle, off_t tRowNumber)
 {
 	struct	VBLOCK
 		*psLockToDelete,
 		*psLock = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead;
 
-	// Sanity check #1
+	// Sanity check #1.  If it wasn't locked, ignore it!
 	if (!psLock || psLock->tRowNumber > tRowNumber)
-		return (EBADARG);
+		return (0);
 	// Check if deleting first entry in list
-#ifndef	CISAMLOCKS
-	if (psLock->tRowNumber == tRowNumber && psLock->iHandle != iHandle)
-		return (ELOCKED);
-#endif	// CISAMLOCKS
 	if (psLock->tRowNumber == tRowNumber)
 	{
-		if (sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead->iIsTransaction && !iIsTransaction)
-			return (ENOTRANS);
+#ifndef	CISAMLOCKS
+		if (psLock->iHandle != iHandle)
+			return (ELOCKED);
+#endif	// CISAMLOCKS
 		sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead = psLock->psNext;
 		if (!sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead)
 			sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail = VBLOCK_NULL;
@@ -634,17 +592,15 @@ iVBLockDelete (int iHandle, off_t tRowNumber, int iIsTransaction)
 		psLock = psLock->psNext;
 	// Sanity check #2
 	if (!psLock->psNext || psLock->psNext->tRowNumber != tRowNumber)
-		return (EBADARG);
-	if (psLock->psNext->iIsTransaction && !iIsTransaction)
-		return (ENOTRANS);
+		return (0);
 	psLockToDelete = psLock->psNext;
-	psLock->psNext = psLockToDelete->psNext;
-	if (psLockToDelete == sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail)
-			sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail = psLock;
 #ifndef	CISAMLOCKS
-	if (psLock->tRowNumber == tRowNumber && psLock->iHandle != iHandle)
+	if (psLockToDelete->iHandle != iHandle)
 		return (ELOCKED);
 #endif	// CISAMLOCKS
+	psLock->psNext = psLockToDelete->psNext;
+	if (psLockToDelete == sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail)
+		sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail = psLock;
 	vVBLockFree (psLockToDelete);
 
 	return (0);

@@ -105,7 +105,7 @@ vbKeysIO.c:
 	in order to find an EXACT match on the row number!
 isinternal.h isopen.c isbuild.c vbLowLevel.c:
 	Moved from using access(2) to using stat(2).
-vbLowLevel.c isbuild.c isopen.c isinternal.h:
+vbLowLevel.c isbuild.c isopen.c isinternal.h vbCheck.c:
 	Implement the 'sharing' of open file handles since the close() call
 	implicitly releases *ALL* locks on the handle that were 'owned' by the
 	process.  Changes made to insert a level of indirection on:
@@ -116,6 +116,35 @@ isinternal.h isHelper.c isopen.c vbLocking.c:
 	locking strategy tries to more closely mirror that of C-ISAM.  However,
 	this introduces BUGS just like in C-ISAM!  I advise against using the
 	CISAMLOCKS and would PREFER you fixed the buggy code you have!
+isopen.c:
+	Minor fixup to delay setting psVBFile handles et al to -1
+	(Was screwing up the freeing of locks!)
+isinternal.h isHelper.c isdelete.c isread.c istrans.c vbLocking.c iswrite.c isrewrite.c:
+	Change locking strategy to eliminate the concept of a 'transactional'
+	lock.  ALL locks are transactional if VBISAM has called isbegin()!
+iswrite.c:
+	Only unlock a row if a transactional lock was applied *AND* the iswrite
+	is going to FAIL!
+vbKeysIO.c:
+	Changes to keep psVBFile [iHandle]->psKeyCurr [iKeyNumber] up to date on
+	iVBKeyDelete() calls.
+	Changes to the debug routines
+	Fix iVBLocateRow (was NFG if ISDUPS was set!)
+isrewrite.c:
+	Changes to make iRowUpdate work correctly for ISDUPS indexes
+vbLocking.c:
+	Changes to iVBEnter such that it will FAIL with ENOTRANS if isbegin was
+	not called PRIOR to the VBISAM function that is calling iVBEnter.
+isdelete.c:
+	Make writing the log transation the LAST function!
+	Also, use pcWriteBuffer for the deleted row so the log WORKS
+vbNodeMemIO.c:
+	TINY change to delay resetting iIsTOF in iNodeSplit since it was being
+	screwed up by iVBNodeSave
+isrewrite.c:
+	OK, let's face it. It was a MESS (Still is, but it worx lotz betta!)
+isopen.c:
+	isindexinfo was returning an INCORRECT di_nrecords!
 Known Issues
 ------------
 Uncertain (but MOSTLY in vbKeysIO.c):

@@ -7,9 +7,13 @@
  * Description:
  *	This module handles ALL the key manipulation for the VBISAM library.
  * Version:
- *	$Id: vbKeysIO.c,v 1.11 2004/06/13 06:32:33 trev_vb Exp $
+ *	$Id: vbKeysIO.c,v 1.12 2004/06/16 10:53:56 trev_vb Exp $
  * Modification History:
  *	$Log: vbKeysIO.c,v $
+ *	Revision 1.12  2004/06/16 10:53:56  trev_vb
+ *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
+ *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
+ *	
  *	Revision 1.11  2004/06/13 06:32:33  trev_vb
  *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
  *	
@@ -64,9 +68,9 @@ static	int	iTreeLoad (int, int, int, char *, off_t);
 #ifdef	DEBUG
 static	void	vDumpKey (struct VBKEY *, struct VBTREE *, int);
 static	void	vDumpTree (struct VBTREE *, int);
-int	iDumpTree (int);
-static	int	iChkTree2 (struct VBTREE *, int);
-int	iChkTree (int);
+int	iDumpTree (int, int);
+static	int	iChkTree2 (struct VBTREE *, int, struct VBKEY *, int *);
+int	iChkTree (int, int);
 #endif	// DEBUG
 
 /*
@@ -277,19 +281,11 @@ iVBKeyLocateRow (int iHandle, int iKeyNumber, off_t tRowNumber)
 	 */
 	vVBMakeKey (iHandle, iKeyNumber, *(psVBFile [iHandle]->ppcRowBuffer), cKeyValue);
 	iResult = iVBKeySearch (iHandle, ISGTEQ, iKeyNumber, 0, cKeyValue, 0);
-	if (iResult == 0)	// If we found <, get next!
-	{
-		iResult = iVBKeyLoad (iHandle, iKeyNumber, ISNEXT, TRUE, &psKey);
-		if (iResult == EENDFILE)
-			iResult = 0;
-		if (iResult)
-		{
-			iserrno = EBADFILE;
-			return (-1);
-		}
-	}
 	if (iResult < 0 || iResult > 1)
+	{
+		iserrno = ENOREC;
 		return (-1);
+	}
 	while (psVBFile [iHandle]->psKeyCurr [iKeyNumber]->tRowNode != tRowNumber)
 	{
 		iserrno = iVBKeyLoad (iHandle, iKeyNumber, ISNEXT, TRUE, &psKey);
@@ -372,7 +368,7 @@ iVBKeyLoad (int iHandle, int iKeyNumber, int iMode, int iSetCurr, struct VBKEY *
 		psKey = psTree->psKeyCurr->psPrev;
 		if (iSetCurr)
 			psTree->psKeyCurr = psTree->psKeyCurr->psPrev;
-		while (psTree->sFlags.iLevel)
+		while (psTree->sFlags.iLevel && psKey)
 		{
 			if (iSetCurr)
 				psTree->psKeyCurr = psKey;
@@ -690,12 +686,23 @@ iVBKeyDelete (int iHandle, int iKeyNumber)
 	 * it's impossible to ever have an iIsHigh entry in the node.
 	 */
 	if (psKey->psNext && psKey->psNext->sFlags.iIsDummy == 0)
+	{
 		psVBFile [iHandle]->psKeyCurr [iKeyNumber] = psKey->psNext;
+		psKey->psParent->psKeyCurr = psKey->psNext;
+	}
 	else
+	{
 		if (psKey->psPrev)
+		{
 			psVBFile [iHandle]->psKeyCurr [iKeyNumber] = psKey->psPrev;
-	else
+			psKey->psParent->psKeyCurr = psKey->psPrev;
+		}
+		else
+		{
 			psVBFile [iHandle]->psKeyCurr [iKeyNumber] = VBKEY_NULL;
+			psKey->psParent->psKeyCurr = VBKEY_NULL;
+		}
+	}
 	while (1)
 	{
 		psTree = psKey->psParent;
@@ -1178,11 +1185,11 @@ vDumpKey (struct VBKEY *psKey, struct VBTREE *psTree, int iIndent)
 #if ISAMMODE == 1
 	printf
 	(
-		"%-*.*s KEY :%02X%02llX\t%04X DAD:%04X KID:%04X ROW:%04llX",
+		"%-*.*s KEY :%02X%02llX\t%08X DAD:%04X KID:%04X ROW:%04llX",
 		iIndent, iIndent, "          ",
 		cBuffer [0],
 		psKey->tDupNumber,
-		(int) psKey & 0xffff,
+		(int) psKey,
 		(int) psKey->psParent & 0xffff,
 		(int) psKey->psChild & 0xffff,
 		psKey->tRowNode & 0xffff
@@ -1190,17 +1197,16 @@ vDumpKey (struct VBKEY *psKey, struct VBTREE *psTree, int iIndent)
 #else	//ISAMMODE == 1
 	printf
 	(
-		"%-*.*s KEY :%02X%02llX\t%04X DAD:%04X KID:%04X ROW:%04llX",
+		"%-*.*s KEY :%02X%02llX\t%08X DAD:%04X KID:%04X ROW:%04llX",
 		iIndent, iIndent, "          ",
 		cBuffer [0],
 		psKey->tDupNumber,
-		(int) psKey & 0xffff,
+		(int) psKey,
 		(int) psKey->psParent & 0xffff,
 		(int) psKey->psChild & 0xffff,
 		psKey->tRowNode & 0xffff
 	);
 #endif	//ISAMMODE == 1
-	fflush (stdout);
 	if (psKey == psTree->psKeyFirst)
 		printf (" 1ST");
 	if (psKey == psTree->psKeyCurr)
@@ -1214,6 +1220,7 @@ vDumpKey (struct VBKEY *psKey, struct VBTREE *psTree, int iIndent)
 	if (psKey->sFlags.iIsHigh)
 		printf (" HI");
 	printf ("\n");
+	fflush (stdout);
 	if (psKey->psChild)
 		vDumpTree (psKey->psChild, iIndent + 1);
 }
@@ -1227,10 +1234,10 @@ vDumpTree (struct VBTREE *psTree, int iIndent)
 #if	ISAMMODE == 1
 	printf
 	(
-		"%-*.*sNODE:%lld  \t%04X DAD:%04X LVL:%04X CUR:%04X",
+		"%-*.*sNODE:%lld  \t%08X DAD:%04X LVL:%04X CUR:%04X",
 		iIndent, iIndent, "          ",
 		psTree->tNodeNumber,
-		(int) psTree & 0xffff,
+		(int) psTree,
 		(int) psTree->psParent & 0xffff,
 		psTree->sFlags.iLevel,
 		(int) psTree->psKeyCurr & 0xffff
@@ -1238,10 +1245,10 @@ vDumpTree (struct VBTREE *psTree, int iIndent)
 #else	//ISAMMODE == 1
 	printf
 	(
-		"%-*.*sNODE:%lld  \t%04X DAD:%04X LVL:%04X CUR:%04X",
+		"%-*.*sNODE:%lld  \t%08X DAD:%04X LVL:%04X CUR:%04X",
 		iIndent, iIndent, "          ",
 		psTree->tNodeNumber,
-		(int) psTree & 0xffff,
+		(int) psTree,
 		(int) psTree->psParent & 0xffff,
 		psTree->sFlags.iLevel,
 		(int) psTree->psKeyCurr & 0xffff
@@ -1260,10 +1267,10 @@ vDumpTree (struct VBTREE *psTree, int iIndent)
 }
 
 int
-iDumpTree (int iHandle)
+iDumpTree (int iHandle, int iKeyNumber)
 {
 	struct	VBTREE
-		*psTree = psVBFile [iHandle]->psTree [0];
+		*psTree = psVBFile [iHandle]->psTree [iKeyNumber];
 
 	fflush (stdout);
 	vDumpTree (psTree, 0);
@@ -1271,8 +1278,9 @@ iDumpTree (int iHandle)
 }
 
 static	int
-iChkTree2 (struct VBTREE *psTree, int iLevel)
+iChkTree2 (struct VBTREE *psTree, int iLevel, struct VBKEY *psCurrKey, int *piCurrentInTree)
 {
+	int	iResult;
 	struct	VBKEY
 		*psKey;
 
@@ -1280,37 +1288,71 @@ iChkTree2 (struct VBTREE *psTree, int iLevel)
 	{
 		if (psKey->psParent != psTree)
 			return (1);
+		if (psKey == psCurrKey)
+			*piCurrentInTree = *piCurrentInTree + 1;
 		if (!psKey->psChild)
 			continue;
 		if (psKey->psChild->psParent != psTree)
-			return (1);
+			return (2);
 		if (psKey->psChild->sFlags.iLevel != iLevel - 1)
-			return (1);
-		if (iChkTree2 (psKey->psChild, psKey->psChild->sFlags.iLevel))
-			return (1);
+			return (3);
+		iResult = iChkTree2 (psKey->psChild, psKey->psChild->sFlags.iLevel, psCurrKey, piCurrentInTree);
+		if (iResult)
+			return (iResult);
 	}
 	return (0);
 }
 
 int
-iChkTree (int iHandle)
+iChkTree (int iHandle, int iKeyNumber)
 {
+	unsigned char
+		cBuffer [QUADSIZE];
+	int	iCurrInTree;
 	struct	VBTREE
-		*psTree = psVBFile [iHandle]->psTree [0];
+		*psTree = psVBFile [iHandle]->psTree [iKeyNumber];
+	struct	VBKEY
+		*psKey;
 
 	if (!psTree)
 		return (0);
-	if (iChkTree2 (psTree, psTree->sFlags.iLevel))
+	psKey = psVBFile [iHandle]->psKeyCurr [iKeyNumber];
+	if (psKey)
 	{
-		iDumpTree (iHandle);
-		getchar ();
+		iCurrInTree = 0;
+		cBuffer [0] = psKey->cKey [0];
 	}
 	else
-		if (psVBFile [iHandle]->psKeyCurr[0] && psVBFile [iHandle]->psKeyCurr[0]->tRowNode == -1)
-		{
-			iDumpTree (iHandle);
-			getchar ();
-		}
+		iCurrInTree = 1;
+	if (iChkTree2 (psTree, psTree->sFlags.iLevel, psKey, &iCurrInTree))
+		printf ("Tree is invalid!\n");
+	else
+		if (psKey && psKey->tRowNode == -1)
+			printf ("CurrentKey is invalid!\n");
+		else
+			if (iCurrInTree != 1)
+				printf ("CurrentKey is in the tree %d times!\n", iCurrInTree);
+			else
+				if (psKey != psKey->psParent->psKeyCurr)
+					printf ("CurrentKey is NOT the current key of its parent!\n");
+	printf
+	(
+		"CURR KEY :%02X%02llX\t%08X DAD:%04X KID:%04X ROW:%04llX",
+		cBuffer [0],
+		psKey->tDupNumber,
+		(int) psKey,
+		(int) psKey->psParent & 0xffff,
+		(int) psKey->psChild & 0xffff,
+		psKey->tRowNode & 0xffff
+	);
+	if (psKey->sFlags.iIsNew)
+		printf (" NEW");
+	if (psKey->sFlags.iIsDummy)
+		printf (" DMY");
+	if (psKey->sFlags.iIsHigh)
+		printf (" HI");
+	printf ("\n");
+	iDumpTree (iHandle, iKeyNumber);
 	return (0);
 }
 #endif	//DEBUG

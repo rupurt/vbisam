@@ -9,9 +9,13 @@
  *	Only functions with external linkage (i.e. is*, ld* and st*) should be
  *	defined within this module.
  * Version:
- *	$Id: isHelper.c,v 1.11 2004/06/13 07:52:17 trev_vb Exp $
+ *	$Id: isHelper.c,v 1.12 2004/06/16 10:53:55 trev_vb Exp $
  * Modification History:
  *	$Log: isHelper.c,v $
+ *	Revision 1.12  2004/06/16 10:53:55  trev_vb
+ *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
+ *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
+ *	
  *	Revision 1.11  2004/06/13 07:52:17  trev_vb
  *	TvB 13June2004
  *	Implemented sharing of open files.
@@ -186,7 +190,7 @@ islock (int iHandle)
 		iserrno = ENOTOPEN;
 		return (-1);
 	}
-	return (iVBDataLock (iHandle, VBWRLOCK, 0, FALSE));
+	return (iVBDataLock (iHandle, VBWRLOCK, 0));
 }
 
 /*
@@ -207,40 +211,21 @@ islock (int iHandle)
 int
 isrelcurr (int iHandle)
 {
-	struct	VBLOCK
-		*psLock,
-		*psLockNext;
-
 	if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen)
 	{
 		iserrno = ENOTOPEN;
 		return (-1);
 	}
-	if (psVBFile [iHandle]->tRowNumber)
+	if (iVBInTrans != VBNOTRANS)
+		return (0);
+	if (!psVBFile [iHandle]->tRowNumber)
 	{
 		iserrno = ENOREC;
 		return (-1);
 	}
-	psLock = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead;
-	while (psLock)
-	{
-		psLockNext = psLock->psNext;
-		if (psLock->iIsTransaction)
-			return (0);
-		if (psLock->tRowNumber > psVBFile [iHandle]->tRowNumber)
-			return (0);
-		if (psLock->tRowNumber != psVBFile [iHandle]->tRowNumber)
-			continue;
-#ifdef	CISAMLOCKS
-		if (iHandle != psLock->iHandle)
-			return (0);
-#endif	//CISAMLOCKS
-// Note: this implicitly relies on the following to reset the psLockHead / Tail
-		iserrno = iVBDataLock (iHandle, VBUNLOCK, psLock->tRowNumber, FALSE);
-		if (iserrno)
-			return (-1);
-		return (0);
-	}
+	iserrno = iVBDataLock (iHandle, VBUNLOCK, psVBFile [iHandle]->tRowNumber);
+	if (iserrno)
+		return (-1);
 	return (0);
 }
 
@@ -262,37 +247,14 @@ isrelcurr (int iHandle)
 int
 isrelease (int iHandle)
 {
-	struct	VBLOCK
-		*psLock,
-		*psLockNext;
-
 	if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen)
 	{
 		iserrno = ENOTOPEN;
 		return (-1);
 	}
-	psLock = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead;
-	while (psLock)
-	{
-		psLockNext = psLock->psNext;
-		if (psLock->iIsTransaction)
-			return (0);
-#ifndef	CISAMLOCKS
-		if (iHandle == psLock->iHandle)
-		{
-// Note: this implicitly relies on the following to reset the psLockHead / Tail
-			iserrno = iVBDataLock (iHandle, VBUNLOCK, psLock->tRowNumber, FALSE);
-			if (iserrno)
-				return (-1);
-		}
-#else	// CISAMLOCKS
-// Note: this implicitly relies on the following to reset the psLockHead / Tail
-		iserrno = iVBDataLock (iHandle, VBUNLOCK, psLock->tRowNumber, FALSE);
-		if (iserrno)
-			return (-1);
-#endif	//CISAMLOCKS
-		psLock = psLockNext;
-	}
+	if (iVBInTrans != VBNOTRANS)
+		return (0);
+	iVBDataLock (iHandle, VBUNLOCK, 0);	// Ignore the return
 	return (0);
 }
 
@@ -316,35 +278,14 @@ isrelease (int iHandle)
 int
 isrelrec (int iHandle, off_t tRowNumber)
 {
-	struct	VBLOCK
-		*psLock,
-		*psLockNext;
-
 	if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen)
 	{
 		iserrno = ENOTOPEN;
 		return (-1);
 	}
-	psLock = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead;
-	while (psLock)
-	{
-		psLockNext = psLock->psNext;
-		if (psLock->iIsTransaction)
-			return (0);
-		if (psLock->tRowNumber > psVBFile [iHandle]->tRowNumber)
-			return (0);
-		if (psLock->tRowNumber != psVBFile [iHandle]->tRowNumber)
-			continue;
-#ifdef	CISAMLOCKS
-		if (iHandle != psLock->iHandle)
-			return (0);
-#endif	//CISAMLOCKS
-// Note: this implicitly relies on the following to reset the psLockHead / Tail
-		iserrno = iVBDataLock (iHandle, VBUNLOCK, psLock->tRowNumber, FALSE);
-		if (iserrno)
-			return (-1);
-		return (0);
-	}
+	iserrno = iVBDataLock (iHandle, VBUNLOCK, tRowNumber);
+	if (iserrno)
+		return (-1);
 	return (0);
 }
 
@@ -486,7 +427,7 @@ isunlock (int iHandle)
 		iserrno = ENOTOPEN;
 		return (-1);
 	}
-	return (iVBDataLock (iHandle, VBUNLOCK, 0, FALSE));
+	return (iVBDataLock (iHandle, VBUNLOCK, 0));
 }
 
 /*

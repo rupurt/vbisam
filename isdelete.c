@@ -8,9 +8,13 @@
  *	This is the module that deals with all the deleting from a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isdelete.c,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: isdelete.c,v 1.8 2004/06/16 10:53:55 trev_vb Exp $
  * Modification History:
  *	$Log: isdelete.c,v $
+ *	Revision 1.8  2004/06/16 10:53:55  trev_vb
+ *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
+ *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
+ *	
  *	Revision 1.7  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -202,7 +206,7 @@ iProcessDelete (int iHandle, off_t tRowNumber)
 
 	if (psVBFile [iHandle]->iOpenMode & ISTRANS)
 	{
-		iserrno = iVBDataLock (iHandle, VBWRLOCK, tRowNumber, TRUE);
+		iserrno = iVBDataLock (iHandle, VBWRLOCK, tRowNumber);
 		if (iserrno)
 			return (-1);
 	}
@@ -213,9 +217,8 @@ iProcessDelete (int iHandle, off_t tRowNumber)
 		return (-1);
 	if (iRowDelete (iHandle, tRowNumber))
 		return (-1);
-	iVBTransDelete (iHandle, tRowNumber, isreclen);	// BUG - retval
-	memset ((void *) *(psVBFile [iHandle]->ppcRowBuffer), 0, psVBFile [iHandle]->iMinRowLength + QUADSIZE);
-	iserrno = iVBDataWrite (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), TRUE, tRowNumber, TRUE);
+	memset ((void *) pcWriteBuffer, 0, psVBFile [iHandle]->iMinRowLength + QUADSIZE);
+	iserrno = iVBDataWrite (iHandle, (void *) pcWriteBuffer, TRUE, tRowNumber, TRUE);
 	if (iserrno)
 		return (-1);
 	if (!(psVBFile [iHandle]->iOpenMode & ISTRANS) || iVBInTrans == VBNOTRANS || iVBInTrans == VBCOMMIT || iVBInTrans == VBROLLBACK)
@@ -227,6 +230,7 @@ iProcessDelete (int iHandle, off_t tRowNumber)
 	isrecnum = tRowNumber;
 	if (tRowNumber == psVBFile [iHandle]->tRowNumber)
 		psVBFile [iHandle]->tRowNumber = 0;
+	iVBTransDelete (iHandle, tRowNumber, isreclen);	// BUG - retval
 	return (0);
 }
 

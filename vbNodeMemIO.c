@@ -9,9 +9,13 @@
  *	linked-lists and writing a node to disk from the memory-based linked-
  *	lists.  The latter possibly causing a split to occur.
  * Version:
- *	$Id: vbNodeMemIO.c,v 1.3 2004/06/13 06:32:33 trev_vb Exp $
+ *	$Id: vbNodeMemIO.c,v 1.4 2004/06/16 10:53:56 trev_vb Exp $
  * Modification History:
  *	$Log: vbNodeMemIO.c,v $
+ *	Revision 1.4  2004/06/16 10:53:56  trev_vb
+ *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
+ *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
+ *	
  *	Revision 1.3  2004/06/13 06:32:33  trev_vb
  *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
  *	
@@ -638,7 +642,6 @@ psNewKey->psParent = psNewTree;	// Doubtful
 		psNewTree->sFlags.iLevel = psTree->sFlags.iLevel;
 		psNewTree->psParent = psTree->psParent;
 		psNewTree->sFlags.iIsTOF = psTree->sFlags.iIsTOF;
-		psTree->sFlags.iIsTOF = 0;
 		/*
 		 * psNewTree is the new LEAF node but is stored in the OLD node
 		 * psTree is the original node and contains the HIGH half
@@ -650,6 +653,7 @@ psNewKey->psParent = psNewTree;	// Doubtful
 		iResult = iVBNodeSave (iHandle, iKeyNumber, psTree, psTree->tNodeNumber, 0, 0);
 		if (iResult)
 			return (iResult);
+		psTree->sFlags.iIsTOF = 0;
 		psHoldKeyCurr = psVBFile [iHandle]->psKeyCurr [iKeyNumber];
 		psVBFile [iHandle]->psKeyCurr [iKeyNumber] = psNewKey->psParent->psParent->psKeyCurr;
 		iResult = iVBKeyInsert (iHandle, psKeyHalfway->psParent->psParent, iKeyNumber, psKeyHalfway->cKey, tNewNode1, psKeyHalfway->tDupNumber, psNewTree);
