@@ -5,9 +5,12 @@
 # Description:
 #	This is the main makefile that BUILDS all this stuff (I hope)
 # Version:
-#	$Id: Makefile,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
+#	$Id: Makefile,v 1.6 2004/03/23 15:13:19 trev_vb Exp $
 # Modification History:
 #	$Log: Makefile,v $
+#	Revision 1.6  2004/03/23 15:13:19  trev_vb
+#	TvB 23Mar2004 Changes made to fix bugs highlighted by JvN's test suite.  Many thanks go out to JvN for highlighting my obvious mistakes.
+#	
 #	Revision 1.5  2004/01/06 14:31:59  trev_vb
 #	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
 #	
@@ -67,7 +70,7 @@ SRCS	= \
 	vbVarLenIO.c
 OBJS	= ${SRCS:.c=.o}
 
-all:	${ALB} ${SLB} IsamTest
+all:	${ALB} ${SLB} JvNTest IsamTest
 
 .o:
 	cc $(CFLAGS) -o $@ $< -l$(LIB)
@@ -80,6 +83,10 @@ ${SLB}:	${OBJS} Makefile
 
 clean:
 	rm -f *.o
+
+JvNTest:	JvNTest.o ${SLB}
+
+JvNTest.o:	JvNTest.c ${DEPS}
 
 CvtTo64:	CvtTo64.o $(SLB)
 

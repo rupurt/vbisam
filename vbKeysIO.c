@@ -7,9 +7,12 @@
  * Description:
  *	This module handles ALL the key manipulation for the VBISAM library.
  * Version:
- *	$Id: vbKeysIO.c,v 1.7 2004/01/06 14:31:59 trev_vb Exp $
+ *	$Id: vbKeysIO.c,v 1.8 2004/03/23 15:13:19 trev_vb Exp $
  * Modification History:
  *	$Log: vbKeysIO.c,v $
+ *	Revision 1.8  2004/03/23 15:13:19  trev_vb
+ *	TvB 23Mar2004 Changes made to fix bugs highlighted by JvN's test suite.  Many thanks go out to JvN for highlighting my obvious mistakes.
+ *	
  *	Revision 1.7  2004/01/06 14:31:59  trev_vb
  *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
  *	
@@ -1589,15 +1592,15 @@ iNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumber
 		}
 		if (psKeydesc->iFlags & ISDUPS)
 		{
+			iKeyLen += QUADSIZE;
 			// If the key is a duplicate and it's not first in node
 			if ((psKey->sFlags.iIsHigh) || (psKey != psTree->psKeyFirst && !memcmp (psKey->cKey, pcPrevKey, psKeydesc->iKeyLength)))
-				iKeyLen = QUADSIZE;
-			else
-				iKeyLen += QUADSIZE;
+				if (psKeydesc->iFlags & DCOMPRESS)
+					iKeyLen = QUADSIZE;
 		}
 		iKeyLen += QUADSIZE;
 		// Split?
-		if (pcNodePtr + iKeyLen >= pcNodeEnd)
+		if (pcNodePtr + iKeyLen >= pcNodeEnd - 1)
 		{
 			if (psTree->psKeyLast->psPrev->sFlags.iIsNew)
 				psKeyHalfway = psTree->psKeyLast->psPrev->psPrev;
@@ -1640,15 +1643,15 @@ iNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumber
 		if (psKeydesc->iFlags & ISDUPS)
 		{
 #if	_FILE_OFFSET_BITS == 64
-			*pcNodePtr++ = (psKey->tRowNode >> 56) & 0xff;
-			*pcNodePtr++ = (psKey->tRowNode >> 48) & 0xff;
-			*pcNodePtr++ = (psKey->tRowNode >> 40) & 0xff;
-			*pcNodePtr++ = (psKey->tRowNode >> 32) & 0xff;
+			*pcNodePtr++ = (psKey->tDupNumber >> 56) & 0xff;
+			*pcNodePtr++ = (psKey->tDupNumber >> 48) & 0xff;
+			*pcNodePtr++ = (psKey->tDupNumber >> 40) & 0xff;
+			*pcNodePtr++ = (psKey->tDupNumber >> 32) & 0xff;
 #endif	// _FILE_OFFSET_BITS == 64
-			*pcNodePtr++ = (psKey->tRowNode >> 24) & 0xff;
-			*pcNodePtr++ = (psKey->tRowNode >> 16) & 0xff;
-			*pcNodePtr++ = (psKey->tRowNode >> 8) & 0xff;
-			*pcNodePtr++ = psKey->tRowNode & 0xff;
+			*pcNodePtr++ = (psKey->tDupNumber >> 24) & 0xff;
+			*pcNodePtr++ = (psKey->tDupNumber >> 16) & 0xff;
+			*pcNodePtr++ = (psKey->tDupNumber >> 8) & 0xff;
+			*pcNodePtr++ = psKey->tDupNumber & 0xff;
 		}
 #if	_FILE_OFFSET_BITS == 64
 		*pcNodePtr++ = (psKey->tRowNode >> 56) & 0xff;

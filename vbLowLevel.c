@@ -12,9 +12,12 @@
  *	In addition, it also performs the node-buffering in order to lower the
  *	quantity of lseek and read system calls required.
  * Version:
- *	$Id: vbLowLevel.c,v 1.4 2004/01/06 14:31:59 trev_vb Exp $
+ *	$Id: vbLowLevel.c,v 1.5 2004/03/23 15:13:19 trev_vb Exp $
  * Modification History:
  *	$Log: vbLowLevel.c,v $
+ *	Revision 1.5  2004/03/23 15:13:19  trev_vb
+ *	TvB 23Mar2004 Changes made to fix bugs highlighted by JvN's test suite.  Many thanks go out to JvN for highlighting my obvious mistakes.
+ *	
  *	Revision 1.4  2004/01/06 14:31:59  trev_vb
  *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
  *	
@@ -645,9 +648,9 @@ iVBBlockWrite (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
 			return (-1);
 	}
 	if (iIsIndex)
-		psBlock->iFileHandle = psVBFile [psBlock->iHandle]->iIndexHandle;
+		psBlock->iFileHandle = psVBFile [iHandle]->iIndexHandle;
 	else
-		psBlock->iFileHandle = psVBFile [psBlock->iHandle]->iDataHandle;
+		psBlock->iFileHandle = psVBFile [iHandle]->iDataHandle;
 	psBlock->iHandle = iHandle;
 	psBlock->iIsDirty = TRUE;
 	psBlock->iIsIndex = iIsIndex;
