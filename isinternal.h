@@ -7,11 +7,15 @@
  *	This is the header that defines the internally used structures for the
  *	VBISAM library.
  * Version:
- *	$ID$
+ *	$Id: isinternal.h,v 1.2 2003/12/22 04:46:55 trev_vb Exp $
  * Modification History:
  *	$Log: isinternal.h,v $
- *	Revision 1.1  2003/12/20 20:11:19  trev_vb
- *	Initial revision
+ *	Revision 1.2  2003/12/22 04:46:55  trev_vb
+ *	TvB 21Dec2003 Changes to add iserrio and fix isreclen type
+ *	TvB 21Dec2003 Also, modified header to correct case ('Id')
+ *	
+ *	Revision 1.1.1.1  2003/12/20 20:11:19  trev_vb
+ *	Init import
  *	
  */
 #include	<stdio.h>
@@ -72,9 +76,9 @@ extern	char	*pcRowBuffer;	// A common area for a data row
 #endif	// VBISAMMAIN
 
 EXTERN	int	iserrno,	// Value of error is returned here
-		iserrio;	// Contains value of last function called
-EXTERN	off_t	isreclen,	// Used for varlen tables
-		isrecnum;	// Current row number
+		iserrio,	// Contains value of last function called
+		isreclen;	// Used for varlen tables
+EXTERN	off_t	isrecnum;	// Current row number
 
 struct	VBLOCK
 {
@@ -153,7 +157,7 @@ struct	DICTNODE			// Offset	32Val	64Val
 		cUniqueID [QUADSIZE],	// 0x2d	0x45	Varies	Same
 		cNodeAudit [QUADSIZE],	// 0x31	0x4d	Varies	Same
 		cLockMethod [INTSIZE],	// 0x35	0x55	0x0008	Same
-		cRFU4 [4],		// 0x37	0x57	0x00...	Same
+		cRFU4 [QUADSIZE],	// 0x37	0x57	0x00...	Same
 		cMaxRowLength [INTSIZE],// 0x3b	0x5b	Varies	Same
 		cRFUVarlen [20],	// 0x3d	0x5d	0x00...	Same
 		cRFULocalIndex [36];	// 0x51	0x71	0x00...	Same
