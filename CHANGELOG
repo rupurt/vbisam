@@ -2,21 +2,61 @@
 ====
 Fixes List
 ----------
+istrans.c:
+	Was locking the log file a little too late thus causing corruption
+vbLocking.c:
+	Set iIsDictLocked when in ISEXCLLOCK mode
+vbIndexIO.c:
+	I was setting iIsDictLocked in the WRONG place!
+isbuild.c:
+	Save the additional info into psVBFile[iHandle]
+isrecover.c isinternal.h:
+	Completely rewrite the isrecover module
+	At present it performs as well (or as badly) as the C-ISAM version.
+istrans.c:
+	Found the *correct* definitions of two previously unknown fields in
+	the transaction log (mode in build and varlen in open)
+	Changed dictionary update when committing deleted rows
+vbMemIO.c:
+	Added a couple of extra lines to clear psChild in a VBKEY whenever that
+	key is freed.  In theory, it shouldn't be needed though since the key
+	itself is freed too! Also cleared the pointers in the VBTREE as needed.
+vbLocking.c:
+	In an effort to fix my interprocess issues, I intentionally killed ALL
+	saved VBTREE / VBKEY lists if the index has changed.  This will be a
+	performance hit on the 64-bit mode of VBISAM that is NOT C-ISAM
+	compatible (-DISAMMODE=1), but who cares for now!
+vbLowLevel.c:
+	Ooops, I had some code before the local vars were defined in iVBLock.
+	*SOME* compilers let it pass, but others did not.
 vbNodeMemIO.c:
 	Finally fixed up the iVBNodeSave and split routines the RIGHT way.
 	The vFixTOFEOF function was always a kludge to hide a bug anyway!
 Known Issues
 ------------
+Uncertain (but MOSTLY in vbKeysIO.c):
+	Two-phase commit (2PC) still needs to be done
+istrans.c:
+	This module has a bug in it when the isrollback function is called.
+	Beyond that, it *appears* to be functioning as expected.
+	I've already fixed 99.99% of the isrollback issues, but the remainder
+	MUST wait until the 2PC code is completed.  The remaining 'bug' is
+	also present in the C-ISAM library!
+isrecover.c:
+	This module was completely re-written for this release.  It is *NOT*
+	complete yet although it currently does all that C-ISAM can do.
+	I am in the process of writing a white-paper on the new / improved
+	version of isrecover as there will be several independant modes of
+	operation of the isrecover function in order to *ATTEMPT* to be far
+	better than the isrecover function within C-ISAM!
 Unknown:
 	The duplicate number in an index node can increment indefinitely on
 	an index where ISDUPS is specified.  After a significant number (2^31
 	iterations in C-ISAM mode), the duplicate number overflows!  C-ISAM also
 	has this same issue.
-Uncertain (but MOSTLY in vbKeysIO.c):
-	Two-phase commit (2PC) still needs to be done
 vbCheck.c:
 	Still not able to process ISVARLEN files
-	Since vbCheck doesn't call iVBExit until it's finished all its work, it
+	Since vbCheck doesn't call iVBExit until it's finished ALL its work, it
 	becomes a REAL memory hog!  (See vbMemIO.c below)
 vbMemIO.c:
 	More of a 'suggestion' than an 'issue'.  It's probably wise to 'limit'
