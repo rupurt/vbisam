@@ -9,9 +9,13 @@
  *	table.  It also implements the isaddindex () and isdelindex () as these
  *	are predominantly only called at isbuild () time.
  * Version:
- *	$Id: isbuild.c,v 1.8 2004/06/13 06:32:33 trev_vb Exp $
+ *	$Id: isbuild.c,v 1.9 2004/06/22 09:39:54 trev_vb Exp $
  * Modification History:
  *	$Log: isbuild.c,v $
+ *	Revision 1.9  2004/06/22 09:39:54  trev_vb
+ *	22June2004 TvB Saved the additional data into psVBFile and dealt with the
+ *	22June2004 TvB file-open lock properly
+ *	
  *	Revision 1.8  2004/06/13 06:32:33  trev_vb
  *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
  *	
@@ -128,7 +132,17 @@ isbuild (char *pcFilename, int iMaxRowLength, struct keydesc *psKey, int iMode)
 	if (psVBFile [iHandle] == (struct DICTINFO *) 0)
 		goto BUILD_ERR;
 	memset (psVBFile [iHandle], 0, sizeof (struct DICTINFO));
+	memcpy (psVBFile [iHandle]->cFilename, pcFilename, strlen (pcFilename) + 1);
 	iserrno = EBADARG;
+	psVBFile [iHandle]->iMinRowLength = iMinRowLength;
+	psVBFile [iHandle]->iMaxRowLength = iMaxRowLength;
+	psVBFile [iHandle]->psKeydesc [0] = (struct keydesc *) pvVBMalloc (sizeof (struct keydesc));
+	if (psVBFile [iHandle]->psKeydesc [0] == (struct keydesc *) 0)
+	{
+		errno = ENOMEM;
+		goto BUILD_ERR;
+	}
+	memcpy (psVBFile [iHandle]->psKeydesc [0], psKey, sizeof (struct keydesc));
 	if (iVBCheckKey (iHandle, psKey, 0, iMinRowLength, TRUE))
 		return (-1);
 	sprintf (cVBNode [0], "%s.dat", pcFilename);
@@ -258,6 +272,10 @@ isbuild (char *pcFilename, int iMaxRowLength, struct keydesc *psKey, int iMode)
 	}
 
 	psVBFile [iHandle]->iIsOpen = 0;	// Mark it as FULLY open
+	if (iMode & ISEXCLLOCK)
+		iVBFileOpenLock (iHandle, 2);
+	else
+		iVBFileOpenLock (iHandle, 1);
 	isclose (iHandle);
 	iserrno = 0;
 	iVBTransBuild (pcFilename, iMinRowLength, iMaxRowLength, psKey, iMode);
