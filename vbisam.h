@@ -7,11 +7,15 @@
  *	This is the header that defines all the various structures et al for
  *	the VBISAM library.
  * Version:
- *	$ID$
+ *	$Id: vbisam.h,v 1.2 2003/12/22 04:50:15 trev_vb Exp $
  * Modification History:
  *	$Log: vbisam.h,v $
- *	Revision 1.1  2003/12/20 20:11:25  trev_vb
- *	Initial revision
+ *	Revision 1.2  2003/12/22 04:50:15  trev_vb
+ *	TvB 21Dec2003 Changes to support iserrio and fix type on isreclen
+ *	TvB 21Dec2003 Also, modified header to correct case ('Id')
+ *	
+ *	Revision 1.1.1.1  2003/12/20 20:11:25  trev_vb
+ *	Init import
  *	
  */
 #include	<stdio.h>
@@ -185,9 +189,10 @@ struct	dictinfo
 #define	EINTERUPT	157	// Interrupted isam call
 #define	EBADFORMAT	171	// Locking or NODESIZE change
 
-extern	int	iserrno;	// Isam error return code
-extern	off_t	isreclen,	// Used for varlen tables
-		isrecnum;	// Current row number
+extern	int	iserrno,	// Isam error return code
+		iserrio,	// NOT used with VBISAM
+		isreclen;	// Used for varlen tables
+extern	off_t	isrecnum;	// Current row number
 struct	audhead
 {
 	char	au_type [2];	// Audit row type aa,dd,rr,ww
