@@ -8,9 +8,12 @@
  *	This is the header that defines the internally used structures for the
  *	VBISAM library.
  * Version:
- *	$Id: isinternal.h,v 1.12 2004/06/16 10:53:55 trev_vb Exp $
+ *	$Id: isinternal.h,v 1.13 2004/06/22 09:43:22 trev_vb Exp $
  * Modification History:
  *	$Log: isinternal.h,v $
+ *	Revision 1.13  2004/06/22 09:43:22  trev_vb
+ *	22June2004 TvB Purely changes to handle the isrecover mode selection
+ *	
  *	Revision 1.12  2004/06/16 10:53:55  trev_vb
  *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
  *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
@@ -129,6 +132,11 @@
 #define	VBWRLOCK	3	// An exclusive write lock, non-blocking
 #define	VBWRLCKW	4	// An exclusive write lock, blocking
 
+// Values for iVBRcvMode (used to control how isrecover works)
+#define	RECOV_C		0x00	// Boring old buggy C-ISAM mode
+#define	RECOV_VB	0x01	// New, improved error detection
+#define	RECOV_LK	0x02	// Use locks in isrecover (See documentation)
+
 // Values for iVBInTrans
 #define	VBNOTRANS	0	// NOT in a transaction at all
 #define	VBBEGIN		1	// An isbegin has been issued but no more
@@ -143,9 +151,10 @@
 		*pcWriteBuffer,		// Common areas for a data row
 		cVBNode [2][MAX_NODE_LENGTH],	// Scratch nodes
 		cVBTransBuffer [65536];	// Buffer for holding a transaction
-	int	iVBMaxUsedHandle = -1,	// The highest opened file handle
+	int	iVBInTrans = VBNOTRANS,	// If not zero, we're in a transaction
 		iVBLogfileHandle = -1,	// The handle to the current logfile
-		iVBInTrans = VBNOTRANS,	// If not zero, we're in a transaction
+		iVBMaxUsedHandle = -1,	// The highest opened file handle
+		iVBRecvMode = RECOV_C,	// Sets isrecover mode
 		iVBRowBufferLength = 0;
 	off_t	tLogfilePosition = 0;	// The logfile size at islogopen()
 #else	// VBISAMMAIN
@@ -154,9 +163,10 @@ extern	char	*pcRowBuffer,
 		*pcWriteBuffer,		// Common areas for a data row
 		cVBNode [2][MAX_NODE_LENGTH],	// Scratch nodes
 		cVBTransBuffer [65536];	// Buffer for holding a transaction
-extern	int	iVBMaxUsedHandle,
+extern	int	iVBInTrans,
 		iVBLogfileHandle,
-		iVBInTrans,
+		iVBMaxUsedHandle,
+		iVBRecvMode,
 		iVBRowBufferLength;
 extern	off_t	tLogfilePosition;
 #endif	// VBISAMMAIN
