@@ -8,9 +8,12 @@
  *	This is the module that deals with all the rewriting to a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isrewrite.c,v 1.7 2004/06/16 10:53:56 trev_vb Exp $
+ *	$Id: isrewrite.c,v 1.8 2004/06/22 09:45:26 trev_vb Exp $
  * Modification History:
  *	$Log: isrewrite.c,v $
+ *	Revision 1.8  2004/06/22 09:45:26  trev_vb
+ *	22June2004 TvB Forced iserrno to 0 by default
+ *	
  *	Revision 1.7  2004/06/16 10:53:56  trev_vb
  *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
  *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
@@ -425,5 +428,6 @@ iRowUpdate (int iHandle, char *pcRow, off_t tRowNumber)
 		}
 	}
 
+	iserrno = 0;
 	return (0);
 }
