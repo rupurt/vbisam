@@ -7,9 +7,12 @@
  * Description:
  *	This module handles ALL the key manipulation for the VBISAM library.
  * Version:
- *	$Id: vbKeysIO.c,v 1.12 2004/06/16 10:53:56 trev_vb Exp $
+ *	$Id: vbKeysIO.c,v 1.13 2004/06/22 09:56:56 trev_vb Exp $
  * Modification History:
  *	$Log: vbKeysIO.c,v $
+ *	Revision 1.13  2004/06/22 09:56:56  trev_vb
+ *	22June2004 TvB Generalized and slightly sped up the bisection code
+ *	
  *	Revision 1.12  2004/06/16 10:53:56  trev_vb
  *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
  *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
@@ -1033,13 +1036,14 @@ iTreeLoad (int iHandle, int iKeyNumber, int iLength, char *pcKeyValue, off_t tDu
 	{
 // The following code takes a 'bisection' type approach for location of the
 // key entry.  It FAR outperforms the original sequential search code.
-#if ISAMMODE == 1
-		iDelta = 256;		// Magic stuff based on NODE LENGTH
-		iIndex = 256;		// and QUADSIZE.  Don't change
-#else	//ISAMMODE == 1
-		iDelta = 128;		// Magic stuff based on NODE LENGTH
-		iIndex = 128;		// and QUADSIZE.  Don't change
-#endif	// ISAMMODE == 1
+		iDelta = 1;
+		iIndex = psTree->sFlags.iKeysInNode;
+		while (iIndex)
+		{
+			iDelta = iDelta << 1;
+			iIndex = iIndex >> 1;
+		}
+		iIndex = iDelta;
 		while (iDelta)
 		{
 			iDelta = iDelta >> 1;
