@@ -9,9 +9,12 @@
  *	Only functions with external linkage (i.e. is*, ld* and st*) should be
  *	defined within this module.
  * Version:
- *	$Id: isHelper.c,v 1.6 2004/03/23 21:55:56 trev_vb Exp $
+ *	$Id: isHelper.c,v 1.7 2004/03/23 22:14:28 trev_vb Exp $
  * Modification History:
  *	$Log: isHelper.c,v $
+ *	Revision 1.7  2004/03/23 22:14:28  trev_vb
+ *	TvB 23Mar2004 Ooops, forgot the 2byte short->int offset in stint code!
+ *	
  *	Revision 1.6  2004/03/23 21:55:56  trev_vb
  *	TvB 23Mar2004 Endian on SPARC (Phase I).  Makefile changes for SPARC.
  *	
@@ -555,8 +558,8 @@ stint (int iValue, char *pcLocation)
 	*(pcLocation + 0) = *(pcTemp + 1);
 	*(pcLocation + 1) = *(pcTemp + 0);
 #else
-	*(pcLocation + 0) = *(pcTemp + 0);
-	*(pcLocation + 1) = *(pcTemp + 1);
+	*(pcLocation + 0) = *(pcTemp + 0 + INTSIZE);
+	*(pcLocation + 1) = *(pcTemp + 1 + INTSIZE);
 #endif
 	return;
 }
