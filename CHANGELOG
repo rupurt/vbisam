@@ -1,23 +1,121 @@
-06Jan2004 1.01Beta
-==================
-Added COPYING.LIB and License line to each module header
-(Thanks to Johann von Nepomuk for spotting this huge oversight on my part!)
-
-Changed VBBLOCK based functions in vbLowLevel.c to delay writing back to the
-disk files while the index is 'locked' for use.  (Limits the number of system
-calls performed.  This *REALLY* has a HUGE impact if ISEXCLLOCK is used!
-
-Implemented variable length row processing
-HUGE warning...  This is not 100% compatible with the competition from IBM.
-Therefore, if you the bcheck utility from IBM, it *MAY* report issues with the
-variable length nodes in the index file.  This is because the IBM product uses
-a *STUPID* algorithm for determining which 'group' a variable length node with
-some free space left should belong to.  (Namely, IBM appears to have cutoffs at
-200bytes, 400bytes, 600bytes and 800bytes.  I have chosen to use a logarithmic
-approach instead with cutoffs at 8bytes, 32bytes, 128bytes and 512bytes)
-To put it MILDLY, the varlen code should be considered 'UNSTABLE' in this
-release.
-
+1.03
+====
+Fixes list
+----------
+vbDataIO.c isinternal.h Makefile:
+	Mikhail pointed out that VBISAM was illegally perform pointer arithmetic
+	on voids within vbDataIO.c.  I'd thought the gcc switch -Wall would trap
+	such things but I was wrong!  Added -Wpointer-arith to Makefile CFLAGS
+isinternal.h:
+	Mikhail added the correct values for VB_ENDIAN on HPUX and AIX.  I've
+	requested Mikhail to check whether his compilers have a CPU-dependant
+	manifest constant defined rather than an OS dependant one.
+isopen.c:
+	Guido pointed out that I was still using the OLD free list format in
+	the tCountRows() function.  This was screwing up the returned value
+	for the isindexinfo() call!
+vbIndexIO.c vbCheck.c:
+	Guido ALSO pointed out that C-ISAM is not 100% C-ISAM compatible in that
+	it occassionally 'forgets' to insert the 0x7f in the free-list node
+	signature. <Sigh>
+CvtTo64.c Makefile isHelper.c isbuild.c isinternal.h isopen.c vbCheck.c vbDataIO.c vbIndexIO.c vbKeysIO.c vbNodeMemIO.c vbVarLenIO.c vbisam.h:
+	Changed the dependency on _FILE_OFFSET_BITS == 64 to ISAMMODE == 1
+	This is to allow the 64-bit file I/O system calls to function even when
+	working on C-ISAM compatible file formats thus breaking the 31-bit (2GB)
+	barrier and extending it to 41-bit!
+vbCheck.c:
+	Fixes made such that all that's required for a successful rebuild of a
+	fixed length row file is the key descriptor nodes in the index file to
+	be 'valid'.
+	Also, set the index map entry for the dictionary node AFTER it may have
+	been squashed.
+istrans.c:
+	A quick check of strace() output showed that C-ISAM is performing some
+	rudimentary locking each time it writes to the transaction log file.
+	I implemented the same scheme for compatibility.
+vbLocking.c vbLowLevel.c:
+	Changes made to iVBLock to directly deal with being interrupted by a
+	signal during the fcntl call.
+vbLocking.c:
+	Made certain that the psKeyCurr[MAXSUBS] of a table are 'valid' within
+	iVBEnter().
+isdelete.c:
+	Tidyup in preparation for 2PC (iProcessDelete function added)
+	Handle correct error return for isdelrec+isdelcurr if row isn't on file
+	Don't try to reinsert a key if iVBKeyDelete fails, it only corrupts the
+	file further.  This should be done INSIDE iVBKeyDelete!
+vbCheck.c:
+	Fixup to correctly 'free' all that was allocated
+vbNodeMemIO.c:
+	If an index had LCOMPRESS but did not have TCOMPRESS, the high value
+	entry in a node would still contain the TCOMPRESS count! (Ooops)
+vbNodeMemIO.c vbKeysIO.c isinternal.h:
+	I noticed that C-ISAM outperformed VBISAM if the index didn't
+	make use of LCOMPRESS, TCOMPRESS or DCOMPRESS.  I surmized that in
+	that case, C-ISAM is simply editing the key within the node rather than
+	completely rebuilding the node from a linked list.  I've implemented
+	a corresponding algorithm (iQuickNodeSave) in this module to bring
+	VBISAM into the lead again (performance wise).  I'm guessing that many/
+	most savvy C-ISAM developers always use SOME form of key compression and
+	thus, this will PROBABLY not affect most people, but I could not BEAR
+	the humiliation of some 25 year old piece of mature code outperforming
+	my 6 month old creation.
+	For anyone even MILDLY interested, the biggest performance gains in
+	VBISAM can be made in the following functions:
+		iVBNodeSave
+		iVBTreeLoad
+		iVBKeyCompare
+		iVBKeyInsert
+		iVBKeyDelete
+	These currently consume the MAJORITY of CPU time and thus even a 'small'
+	improvement in these functions can reap potentially disparate (large)
+	benefit to overall throughput.
+vbNodeMemIO.c:
+	Fixes to 'force' the iIsTOF and iIsEOF flags within the tree
+isHelper.c:
+	a: Initialize tValue to 0 in ldquad and lValue to 0 in ldlong
+	b: Globally reverse the VB_ENDIAN content to match BYTE_ORDER
+isbuild.c:
+	isaddindex was not returning an error if the table was not open in
+	ISEXCLLOCK mode but still did not create the new index
+MVTest.c:
+	Extended to handle multiple indexes
+	Decided to make rowlen 256 bytes too!
+README.64bit:
+	New file to describe some background for 64 bit operation
+isrecover.c:
+	Include error checking for call to iVBRollMeBack
+iswrite.c:
+	This was writing an INCORRECT transaction on fixed length files until
+	isreclen got set.  Oops!
+vbBlockIO.c:
+	Standardized all file offsets as long long (64 bit)
+vbKeysIO.c:
+	Added in a couple of extra 'checking' algorithms for DEBUG use
+	Largely rewrote the entire iVBKeyDelete function
+vbMemIO.c:
+	Added a few assertions on VBTREE / VBKEY (de-)allocation
+isread.c:
+	Guido pointed out that I wasn't setting iResult after iVBDataLock and
+	was therefore returning JUNK
+Known Issues
+------------
+Uncertain:
+	Two-phase commit (2PC) still needs to be done
+vbLowLevel.c:
+	I believe that incoming signals are still an issue on at least the
+	tVBRead () function.
+	(write() *SHOULD* be atomic already but I know that read() is not)
+vbCheck.c:
+	Still not able to process ISVARLEN files
+vbMemIO.c:
+	More of a 'suggestion' than an 'issue'.  It's probably wise to 'limit'
+	the amount of RAM any given VBISAM process can allocate.  An environment
+	variable would be the logical way to do this.
+Documentation:
+	Heck, I need to write a whole freaking BOOK!!!
+	Reminder to include the environment variables in the docs
+================================================================================
 06Jun2004 1.02-beta (D-Day!)
 ============================
 Fixes list
@@ -125,3 +223,23 @@ to allow things to 'settle' and I'll seriously consider moving the SF.net status
 of VBISAM from BETA to whatever comes next...
 As always, many thanks to those in the virtual OSS world who have assisted me
 to 'polish' VBISAM to its current state.  Feature requests are *ALWAYS* welcome
+================================================================================
+06Jan2004 1.01Beta
+==================
+Added COPYING.LIB and License line to each module header
+(Thanks to Johann von Nepomuk for spotting this huge oversight on my part!)
+
+Changed VBBLOCK based functions in vbLowLevel.c to delay writing back to the
+disk files while the index is 'locked' for use.  (Limits the number of system
+calls performed.  This *REALLY* has a HUGE impact if ISEXCLLOCK is used!
+
+Implemented variable length row processing
+HUGE warning...  This is not 100% compatible with the competition from IBM.
+Therefore, if you use the bcheck utility from IBM, it *MAY* report issues with
+the variable length nodes in the index file.  This is because the IBM product
+uses a *STUPID* algorithm for determining which 'group' a variable length node
+with some free space left should belong to.  (Namely, IBM appears to have
+cutoffs at 200-bytes, 400-bytes, 600-bytes and 800-bytes.  I have chosen to use
+a logarithmic approach instead with cutoffs at 8-bytes, 32-bytes, 128-bytes and
+512-bytes).  To put it MILDLY, the varlen code should be considered 'UNSTABLE'
+in this release.

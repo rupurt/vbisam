@@ -5,9 +5,13 @@
 # Description:
 #	This is the main makefile that BUILDS all this stuff (I hope)
 # Version:
-#	$Id: Makefile,v 1.8 2004/06/06 20:52:21 trev_vb Exp $
+#	$Id: Makefile,v 1.9 2004/06/11 22:16:16 trev_vb Exp $
 # Modification History:
 #	$Log: Makefile,v $
+#	Revision 1.9  2004/06/11 22:16:16  trev_vb
+#	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+#	checkin that will not be immediately made into a release.
+#	
 #	Revision 1.8  2004/06/06 20:52:21  trev_vb
 #	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
 #	
@@ -45,15 +49,20 @@ SLB	= /usr/lib/lib$(LIB).so
 # -g:		Produces code with which gdb can be used
 # -pg:		Generate gprof-able code
 # -D_FILE_OFFSET_BITS=64:
-#		Produces 64-bit file-I/O code (Files incompatable with 32-bit)
+#		Needed to break the 2GB barrier on many 32-bit CPU systems
+# -DISAMMODE=1	Files use 64-bit node and row numbers and thus don't work with
+#		any C-ISAM linked programs
+# -DISAMMODE=0	Files are (supposedly) 100% C-ISAM compatible
 # ****************************************************************************
 CC	= gcc
-CFLAGS	= -fPIC -Wall -DDEBUG -O3 -s -D_FILE_OFFSET_BITS=64
-CFLAGS	= -fPIC -Wall -DDEBUG -D_FILE_OFFSET_BITS=64 -pg -g
-CFLAGS	= -fPIC -Wall -DDEBUG -O3 -s
-CFLAGS	= -fPIC -Wall -DDEBUG -pg -g
-CFLAGS	= -fPIC -Wall -pg -g
-CFLAGS	= -fPIC -Wall -O3 -s
+CFLAGS	= -fPIC -Wall -pg -g -D_FILE_OFFSET_BITS=64 -DDEBUG -DISAMMODE=1
+CFLAGS	= -fPIC -Wall -O3 -s -D_FILE_OFFSET_BITS=64 -DDEBUG -DISAMMODE=1
+CFLAGS	= -fPIC -Wall -pg -g -D_FILE_OFFSET_BITS=64 -DDEBUG -DISAMMODE=0
+CFLAGS	= -fPIC -Wall -O3 -s -D_FILE_OFFSET_BITS=64 -DDEBUG -DISAMMODE=0
+CFLAGS	= -fPIC -Wall -pg -g -D_FILE_OFFSET_BITS=64 -DISAMMODE=1
+CFLAGS	= -fPIC -Wall -O3 -s -D_FILE_OFFSET_BITS=64 -DISAMMODE=1
+CFLAGS	= -fPIC -Wall -pg -g -D_FILE_OFFSET_BITS=64 -DISAMMODE=0
+CFLAGS	= -fPIC -Wall -O3 -s -D_FILE_OFFSET_BITS=64 -DISAMMODE=0
 
 SRCS	= \
 	isDecimal.c \

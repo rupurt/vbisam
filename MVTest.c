@@ -7,9 +7,13 @@
  * Description:
  *	This module tests a bunch of the features of VBISAM
  * Version:
- *	$Id: MVTest.c,v 1.1 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: MVTest.c,v 1.2 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: MVTest.c,v $
+ *	Revision 1.2  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.1  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -32,6 +36,7 @@ main (int iArgc, char **ppcArgv)
 	int	iResult,
 		iLoop,
 		iLoop2,
+		iLoop3,
 		iHandle;
 	unsigned char
 		cRecord [100];
@@ -58,12 +63,17 @@ main (int iArgc, char **ppcArgv)
 	if (iArgc > 1 && strcmp (ppcArgv [1], "create") == 0)
 	{
 		iserase (cFileName);
-		iHandle = isbuild (cFileName, 100, &sKeydesc, ISINOUT+ISFIXLEN+ISAUTOLOCK);
+		iHandle = isbuild (cFileName, 100, &sKeydesc, ISINOUT+ISFIXLEN+ISEXCLLOCK);
 		if (iHandle < 0)
 		{
 			fprintf (stdout, "Error creating database: %d\n", iserrno);
 			exit (-1);
 		}
+		sKeydesc.k_flags |= ISDUPS;
+		//for (sKeydesc.k_start = 1; sKeydesc.k_start < MAXSUBS; sKeydesc.k_start++)
+		for (sKeydesc.k_start = 1; sKeydesc.k_start < 4; sKeydesc.k_start++)
+			if (isaddindex (iHandle, &sKeydesc))
+				printf ("Error adding index %d\n", sKeydesc.k_start);
 		isclose (iHandle);
 		return (0);
 	}
@@ -101,9 +111,9 @@ main (int iArgc, char **ppcArgv)
 
 		for (iLoop2 = 0; iLoop2 < 100; iLoop2++)
 		{
-			cRecord [0] = rand () % 256;
-			cRecord [1] = rand () % 256;
-			memset (cRecord+2, rand () % 256, 100 - 2);
+			memset (cRecord, rand () % 256, 100);
+			for (iLoop3 = 0; iLoop3 < MAXSUBS; iLoop3++)
+				cRecord [iLoop3] = rand () % 256;
 
 			switch (rand () % 4)
 			{
@@ -136,9 +146,8 @@ main (int iArgc, char **ppcArgv)
 				break;
 
 			case	2:
-				cRecord [0] = rand () % 256;
-				cRecord [1] = rand () % 256;
-cRecord [1] = 'A';
+				for (iLoop3 = 0; iLoop3 < MAXSUBS; iLoop3++)
+					cRecord [iLoop3] = rand () % 256;
 				if ((iResult = isrewrite (iHandle, (char *)cRecord)) != 0)
 				{
 					if (iserrno == ELOCKED)

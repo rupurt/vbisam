@@ -13,9 +13,13 @@
  *	If VB_CACHE is VB_CACHE_ON then cached I/O is performed
  *	Otherwise, a compile error results
  * Version:
- *	$Id: vbBlockIO.c,v 1.1 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: vbBlockIO.c,v 1.2 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: vbBlockIO.c,v $
+ *	Revision 1.2  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.1  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -203,11 +207,11 @@ iVBBlockRead (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
 		}
 		else
 		{
-			fprintf (stderr, "Failed to read in block %ld from the %s file of table %s!\n", tBlockNumber, iIsIndex ? "Index" : "Data", psVBFile [iHandle]->cFilename);
+			fprintf (stderr, "Failed to read in block %lld from the %s file of table %s!\n", tBlockNumber, iIsIndex ? "Index" : "Data", psVBFile [iHandle]->cFilename);
 			assert (FALSE);
 		}
 	}
-	fprintf (stderr, "Failed to position to block %ld of the %s file of table %s!\n", tBlockNumber, iIsIndex ? "Index" : "Data", psVBFile [iHandle]->cFilename);
+	fprintf (stderr, "Failed to position to block %lld of the %s file of table %s!\n", tBlockNumber, iIsIndex ? "Index" : "Data", psVBFile [iHandle]->cFilename);
 	assert (FALSE);
 	return (-1);
 }
@@ -226,7 +230,7 @@ iVBBlockRead (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
 		tResult = tVBLseek (psVBFile [iHandle]->iDataHandle, tOffset, SEEK_SET);
 	if (tResult != tOffset)
 	{
-		fprintf (stderr, "Failed to position to block %ld of the %s file of table %s!\n", tBlockNumber, iIsIndex ? "Index" : "Data", psVBFile [iHandle]->cFilename);
+		fprintf (stderr, "Failed to position to block %lld of the %s file of table %s!\n", tBlockNumber, iIsIndex ? "Index" : "Data", psVBFile [iHandle]->cFilename);
 		assert (FALSE);
 	}
 
@@ -241,7 +245,7 @@ iVBBlockRead (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
 	}
 	if ((int) tResult != psVBFile [iHandle]->iNodeSize)
 	{
-		fprintf (stderr, "Failed to read in block %ld from the %s file of table %s!\n", tBlockNumber, iIsIndex ? "Index" : "Data", psVBFile [iHandle]->cFilename);
+		fprintf (stderr, "Failed to read in block %lld from the %s file of table %s!\n", tBlockNumber, iIsIndex ? "Index" : "Data", psVBFile [iHandle]->cFilename);
 		assert (FALSE);
 	}
 	return (0);
@@ -372,7 +376,7 @@ iVBBlockWrite (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
 		tResult = tVBLseek (psVBFile [iHandle]->iDataHandle, tOffset, SEEK_SET);
 	if (tResult == (off_t) -1)
 	{
-		fprintf (stderr, "Failed to position to block %ld of the %s file of table %s!\n", tBlockNumber, iIsIndex ? "Index" : "Data", psVBFile [iHandle]->cFilename);
+		fprintf (stderr, "Failed to position to block %lld of the %s file of table %s!\n", tBlockNumber, iIsIndex ? "Index" : "Data", psVBFile [iHandle]->cFilename);
 		assert (FALSE);
 	}
 
@@ -382,7 +386,7 @@ iVBBlockWrite (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
 		tResult = (off_t) tVBWrite (psVBFile [iHandle]->iDataHandle, cBuffer, (size_t) psVBFile [iHandle]->iNodeSize);
 	if ((int) tResult != psVBFile [iHandle]->iNodeSize)
 	{
-		fprintf (stderr, "Failed to write out block %ld to the %s file of table %s!\n", tBlockNumber, iIsIndex ? "Index" : "Data", psVBFile [iHandle]->cFilename);
+		fprintf (stderr, "Failed to write out block %lld to the %s file of table %s!\n", tBlockNumber, iIsIndex ? "Index" : "Data", psVBFile [iHandle]->cFilename);
 		assert (FALSE);
 	}
 	return (0);
@@ -457,13 +461,13 @@ iVBBlockFlush (int iHandle)
 			}
 			else
 			{
-				fprintf (stderr, "Failed to write out block %ld to the %s file of table %s!\n", psBlock->tBlockNumber, psBlock->iIsIndex ? "Index" : "Data", psVBFile [psBlock->iHandle]->cFilename);
+				fprintf (stderr, "Failed to write out block %lld to the %s file of table %s!\n", psBlock->tBlockNumber, psBlock->iIsIndex ? "Index" : "Data", psVBFile [psBlock->iHandle]->cFilename);
 				assert (FALSE);
 			}
 		}
 		else
 		{
-			fprintf (stderr, "Failed to position to block %ld of the %s file of table %s!\n", psBlock->tBlockNumber, psBlock->iIsIndex ? "Index" : "Data", psVBFile [psBlock->iHandle]->cFilename);
+			fprintf (stderr, "Failed to position to block %lld of the %s file of table %s!\n", psBlock->tBlockNumber, psBlock->iIsIndex ? "Index" : "Data", psVBFile [psBlock->iHandle]->cFilename);
 			assert (FALSE);
 		}
 	}

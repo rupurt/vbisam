@@ -8,9 +8,13 @@
  *	This is the module that deals solely with the isrecover function in the
  *	VBISAM library.
  * Version:
- *	$Id: isrecover.c,v 1.1 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: isrecover.c,v 1.2 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: isrecover.c,v $
+ *	Revision 1.2  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.1  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -114,8 +118,10 @@ int	isrecover (void)
 				if (sOpenTrans [iLoop].tOffset != -1 && ldint (psVBLogHeader->cPID) == sOpenTrans [iLoop].iPID)
 				{
 					vFreeDelayed (iLoop);
-					iVBRollMeBack (sOpenTrans [iLoop].tOffset, sOpenTrans [iLoop].iPID, TRUE);
+					iserrno = iVBRollMeBack (sOpenTrans [iLoop].tOffset, sOpenTrans [iLoop].iPID, TRUE);
 					sOpenTrans [iLoop].tOffset = -1;
+					if (iserrno)
+						return (-1);	// Bug RestoreState
 				}
 			for (iLoop = 0; iLoop < MAX_OPEN_TRANS; iLoop++)
 			{
@@ -145,8 +151,10 @@ int	isrecover (void)
 				if (sOpenTrans [iLoop].tOffset != -1 && ldint (psVBLogHeader->cPID) == sOpenTrans [iLoop].iPID)
 				{
 					vFreeDelayed (iLoop);
-					iVBRollMeBack (sOpenTrans [iLoop].tOffset, sOpenTrans [iLoop].iPID, TRUE);
+					iserrno = iVBRollMeBack (sOpenTrans [iLoop].tOffset, sOpenTrans [iLoop].iPID, TRUE);
 					sOpenTrans [iLoop].tOffset = -1;
+					if (iserrno)
+						return (-1);	// Bug RestoreState
 				}
 			tVBLseek (iVBLogfileHandle, tRBOffset, SEEK_SET);
 			tOffset += tLength2;
@@ -282,7 +290,9 @@ fprintf (stderr, "BUG: VBL_UNIQUEID - isrecover is incomplete!\n");
 		if (sOpenTrans [iLoop].tOffset != -1)
 		{
 			vFreeDelayed (iLoop);
-			iVBRollMeBack (sOpenTrans [iLoop].tOffset, sOpenTrans [iLoop].iPID, TRUE);
+			iserrno = iVBRollMeBack (sOpenTrans [iLoop].tOffset, sOpenTrans [iLoop].iPID, TRUE);
+			if (iserrno)
+				return (-1);	// Bug RestoreState
 		}
 	}
 	// Return the list of open files to what it was before the isrecover

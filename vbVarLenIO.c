@@ -8,9 +8,13 @@
  *	This is the 'behind-the-scenes' module that deals with any variable
  *	length row processing in the VBISAM library.
  * Version:
- *	$Id: vbVarLenIO.c,v 1.2 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: vbVarLenIO.c,v 1.3 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: vbVarLenIO.c,v $
+ *	Revision 1.3  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.2  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -32,30 +36,30 @@ struct	SVARLEN
 		cFreeOffset [INTSIZE],	// Position in node of free space
 		cFreeCont [QUADSIZE],	// Continuation node (Only on FULL node)
 		cFlag,			// Unknown, set to 0x00
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 		cUsedCount [INTSIZE],	// Number of slots in use
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 		cUsedCount,		// Number of slots in use
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 		cGroup;			// Used as a reference in dictionary
 };
 static	char
 	cNode [MAX_NODE_LENGTH];
 static	struct	SVARLEN
 	*psVarlenHeader = (struct SVARLEN *) cNode;
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 static	int
 	iGroupSize [] =
 	{
 		QUADSIZE, 16, 32, 64, 128, 256, 512, 1024, 2048, MAX_NODE_LENGTH
 	};
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 static	int
 	iGroupSize [] =
 	{
 		QUADSIZE, 8, 32, 128, 512, MAX_NODE_LENGTH
 	};
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 
 int
 iVBVarlenRead (int iHandle, char *pcBuffer, off_t tNodeNumber, int iSlotNumber, int iLength)
@@ -95,12 +99,12 @@ iVBVarlenRead (int iHandle, char *pcBuffer, off_t tNodeNumber, int iSlotNumber, 
 			return (0);
 		}
 		iLength -= iSlotLength;
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 		iSlotNumber = ldint (psVarlenHeader->cFreeCont) >> 6;
 		*(psVarlenHeader->cFreeCont + 1) &= 0x3f;
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 		iSlotNumber = *(psVarlenHeader->cFreeCont);
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 		*(psVarlenHeader->cFreeCont) = 0;
 		tNodeNumber = ldquad (psVarlenHeader->cFreeCont);
 	}
@@ -145,11 +149,11 @@ iVBVarlenWrite (int iHandle, char *pcBuffer, int iLength)
 			stint (0, psVarlenHeader->cFreeThis);
 			stint (psVBFile [iHandle]->iNodeSize - (3 + INTSIZE + INTSIZE), psVarlenHeader->cFreeOffset);
 			psVarlenHeader->cFlag = 0x01;
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 			stint (1, psVarlenHeader->cUsedCount);
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 			psVarlenHeader->cUsedCount = 1;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 			psVarlenHeader->cGroup = 0x00;
 			memcpy (&(psVarlenHeader->cGroup) + 1, pcBuffer, psVBFile [iHandle]->iNodeSize - (3 + INTSIZE + INTSIZE + sizeof (struct SVARLEN)));
 			pcBuffer += psVBFile [iHandle]->iNodeSize - (3 + INTSIZE + INTSIZE + sizeof (struct SVARLEN));
@@ -179,11 +183,11 @@ iVBVarlenWrite (int iHandle, char *pcBuffer, int iLength)
 		if (tNodeNumber)
 		{
 			stquad (tNewNode, psVarlenHeader->cFreeCont);
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 			stint (iSlotNumber << 6 + ldint (psVarlenHeader->cFreeCont), psVarlenHeader->cFreeCont);
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 			*psVarlenHeader->cFreeCont = iSlotNumber;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 			if (iVBBlockWrite (iHandle, TRUE, tNodeNumber, cNode))
 				return (-1);
 			if (!psVBFile [iHandle]->tVarlenNode)
@@ -229,11 +233,11 @@ iVBVarlenDelete (int iHandle, off_t tNodeNumber, int iSlotNumber, int iLength)
 		stint (0, cNode + psVBFile [iHandle]->iNodeSize - (3 + INTSIZE + INTSIZE + (iSlotNumber * 2 * INTSIZE)));
 		iThisOffset = ldint (cNode + psVBFile [iHandle]->iNodeSize - (3 + INTSIZE + (iSlotNumber * 2 * INTSIZE)));
 		stint (0, cNode + psVBFile [iHandle]->iNodeSize - (3 + INTSIZE + (iSlotNumber * 2 * INTSIZE)));
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 		iUsedCount = ldint (psVarlenHeader->cUsedCount);
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 		iUsedCount = psVarlenHeader->cUsedCount;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 		iIsAnyUsed = FALSE;
 		for (iLoop = 0; iLoop < iUsedCount; iLoop++)
 			if (ldint (cNode + psVBFile [iHandle]->iNodeSize - (3 + INTSIZE + INTSIZE + (iLoop * 2 * INTSIZE))))
@@ -273,11 +277,11 @@ iVBVarlenDelete (int iHandle, off_t tNodeNumber, int iSlotNumber, int iLength)
 		if (iSlotNumber == iUsedCount)
 		{
 			iUsedCount--;
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 			stint (iUsedCount - 1, psVarlenHeader->cUsedCount);
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 			psVarlenHeader->cUsedCount = iUsedCount;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 			iFreeThis += (INTSIZE * 2);
 		}
 		iMoveLength = psVBFile [iHandle]->iNodeSize - (iThisOffset + iThisLength);
@@ -356,21 +360,21 @@ tTailNode (int iHandle, char *pcBuffer, int iLength, int *piSlotNumber)
 		psHdr->cGroup = -1;
 		cLclNode [psVBFile [iHandle]->iNodeSize - 3] = 0x7c;
 		*piSlotNumber = 0;
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 		stint (1, psHdr->cUsedCount);
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 		psHdr->cUsedCount = 1;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 	}
 	else
 	{
 		*piSlotNumber = -1;
 		pcNodePtr = cLclNode + psVBFile [iHandle]->iNodeSize - (3 + INTSIZE + INTSIZE);
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 		for (iSlotNumber = 0; iSlotNumber < ldint (psHdr->cUsedCount); iSlotNumber++)
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 		for (iSlotNumber = 0; iSlotNumber < psHdr->cUsedCount; iSlotNumber++)
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 			if (ldint (pcNodePtr))
 			{
 				pcNodePtr -= (INTSIZE * 2);
@@ -383,13 +387,13 @@ tTailNode (int iHandle, char *pcBuffer, int iLength, int *piSlotNumber)
 			}
 		if (*piSlotNumber == -1)
 		{
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 			*piSlotNumber = ldint (psHdr->cUsedCount);
 			stint (*(piSlotNumber) + 1, psHdr->cUsedCount);
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 			*piSlotNumber = psHdr->cUsedCount;
 			psHdr->cUsedCount++;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 			stint (ldint (psHdr->cFreeThis) - (INTSIZE * 2), psHdr->cFreeThis);
 		}
 	}

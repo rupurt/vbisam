@@ -8,9 +8,13 @@
  *	This module handles the locking on both the index and data files for the
  *	VBISAM library.
  * Version:
- *	$Id: vbLocking.c,v 1.6 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: vbLocking.c,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: vbLocking.c,v $
+ *	Revision 1.7  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.6  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -96,9 +100,13 @@ int
 iVBEnter (int iHandle, int iModifying)
 {
 	int	iLockMode,
+		iLoop,
 		iResult;
 	off_t	tLength;
 
+	for (iLoop = 0; iLoop < MAXSUBS; iLoop++)
+		if (psVBFile [iHandle]->psKeyCurr [iLoop] && psVBFile [iHandle]->psKeyCurr [iLoop]->tRowNode == -1)
+			psVBFile [iHandle]->psKeyCurr [iLoop] = VBKEY_NULL;
 	iserrno = 0;
 	if (!psVBFile [iHandle] || (psVBFile [iHandle]->iIsOpen && iVBInTrans != VBCOMMIT && iVBInTrans != VBROLLBACK))
 	{
@@ -219,6 +227,9 @@ iVBExit (int iHandle)
 		else
 			iVBBufferLevel = 4;
 	}
+#ifdef	DEBUG
+	iChkTree (iHandle);
+#endif	// DEBUG
 	for (iLoop2 = 0; iLoop2 < psVBFile [iHandle]->iNKeys; iLoop2++)
 	{
 		struct	VBKEY
@@ -230,6 +241,11 @@ iVBExit (int iHandle)
 		 * This is a REAL fudge factor...
 		 * We simply free up all the dynamically allocated memory
 		 * associated with non-current nodes above a certain level.
+		 * In other words, we wish to keep the CURRENT key and all data
+		 * in memory above it for iVBBufferLevel levels.
+		 * Anything *ABOVE* that in the tree is to be purged with
+		 * EXTREME prejudice except for the 'current' tree up to the
+		 * root.
 		 */
 		for (iLoop = 0; psKey && iLoop < iVBBufferLevel; iLoop++)
 		{
@@ -360,12 +376,7 @@ iVBFileOpenLock (int iHandle, int iMode)
 		return (EBADARG);
 	}
 
-	// Whether we're locking *OR* unlocking a region, retry forever on EINTR
-	// BUG? - This *MAY* be a potential race condition?
-	do
-	{
-		iResult = iVBLock (psVBFile [iHandle]->iIndexHandle, tOffset, 1, iLockType);
-	} while (iResult != 0 && errno == EINTR);
+	iResult = iVBLock (psVBFile [iHandle]->iIndexHandle, tOffset, 1, iLockType);
 	if (iResult != 0)
 		return (EFLOCKED);
 

@@ -10,9 +10,13 @@
  *	within this module, it becomes easier to 'virtualize' the filesystem
  *	at a later date.
  * Version:
- *	$Id: vbLowLevel.c,v 1.6 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: vbLowLevel.c,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: vbLowLevel.c,v $
+ *	Revision 1.7  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.6  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -191,7 +195,9 @@ tVBWrite (int iHandle, void *pvBuffer, size_t tCount)
 int
 iVBLock (int iHandle, off_t tOffset, off_t tLength, int iMode)
 {
-	int	iCommand;
+	int	iCommand,
+		iType,
+		iResult = -1;
 	struct	flock
 		sFlock;
 
@@ -199,40 +205,44 @@ iVBLock (int iHandle, off_t tOffset, off_t tLength, int iMode)
 	{
 	case	VBUNLOCK:
 		iCommand = F_SETLK;
-		sFlock.l_type = F_UNLCK;
+		iType = F_UNLCK;
 		break;
 
 	case	VBRDLOCK:
 		iCommand = F_SETLK;
-		sFlock.l_type = F_RDLCK;
+		iType = F_RDLCK;
 		break;
 
 	case	VBRDLCKW:
 		iCommand = F_SETLKW;
-		sFlock.l_type = F_RDLCK;
+		iType = F_RDLCK;
 		break;
 
 	case	VBWRLOCK:
 		iCommand = F_SETLK;
-		sFlock.l_type = F_WRLCK;
+		iType = F_WRLCK;
 		break;
 
 	case	VBWRLCKW:
 		iCommand = F_SETLKW;
-		sFlock.l_type = F_WRLCK;
+		iType = F_WRLCK;
 		break;
 
 	default:
 		errno = EBADARG;
 		return (-1);
 	}
-	sFlock.l_whence = SEEK_SET;
-	sFlock.l_start = tOffset;
-	sFlock.l_len = tLength;
-	sFlock.l_pid = 0;
-	if (fcntl (iHandle, iCommand, &sFlock))
-		return (-1);
-	return (0);
+	errno = EINTR;
+	while (iResult && errno == EINTR)	// Just in case we're signalled
+	{
+		sFlock.l_type = iType;
+		sFlock.l_whence = SEEK_SET;
+		sFlock.l_start = tOffset;
+		sFlock.l_len = tLength;
+		sFlock.l_pid = 0;
+		iResult = fcntl (iHandle, iCommand, &sFlock);
+	}
+	return (iResult);
 }
 
 /*

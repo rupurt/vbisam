@@ -9,9 +9,13 @@
  *	Only functions with external linkage (i.e. is*, ld* and st*) should be
  *	defined within this module.
  * Version:
- *	$Id: isHelper.c,v 1.8 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: isHelper.c,v 1.9 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: isHelper.c,v $
+ *	Revision 1.9  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.8  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -542,13 +546,13 @@ ldint (char *pcLocation)
 	short	iValue = 0;
 	char	*pcTemp = (char *) &iValue;
 
-#if	VB_ENDIAN == 4321
+#if	VB_ENDIAN == 1234
 	*(pcTemp + 1) = *(pcLocation + 0);
 	*(pcTemp + 0) = *(pcLocation + 1);
-#else
+#else	// VB_ENDIAN == 1234
 	*(pcTemp + 0) = *(pcLocation + 0);
 	*(pcTemp + 1) = *(pcLocation + 1);
-#endif
+#endif	// VB_ENDIAN == 1234
 	return (iValue);
 }
 
@@ -572,13 +576,13 @@ stint (int iValue, char *pcLocation)
 {
 	char	*pcTemp = (char *) &iValue;
 
-#if	VB_ENDIAN == 4321
+#if	VB_ENDIAN == 1234
 	*(pcLocation + 0) = *(pcTemp + 1);
 	*(pcLocation + 1) = *(pcTemp + 0);
-#else
+#else	// VB_ENDIAN == 1234
 	*(pcLocation + 0) = *(pcTemp + 0 + INTSIZE);
 	*(pcLocation + 1) = *(pcTemp + 1 + INTSIZE);
-#endif
+#endif	// VB_ENDIAN == 1234
 	return;
 }
 
@@ -598,20 +602,20 @@ stint (int iValue, char *pcLocation)
 long
 ldlong (char *pcLocation)
 {
-	long	lValue;
+	long	lValue = 0;
 	char	*pcTemp = (char *) &lValue;
 
-#if	VB_ENDIAN == 4321
+#if	VB_ENDIAN == 1234
 	*(pcTemp + 3) = *(pcLocation + 0);
 	*(pcTemp + 2) = *(pcLocation + 1);
 	*(pcTemp + 1) = *(pcLocation + 2);
 	*(pcTemp + 0) = *(pcLocation + 3);
-#else
+#else	// VB_ENDIAN == 1234
 	*(pcTemp + 0) = *(pcLocation + 0);
 	*(pcTemp + 1) = *(pcLocation + 1);
 	*(pcTemp + 2) = *(pcLocation + 2);
 	*(pcTemp + 3) = *(pcLocation + 3);
-#endif
+#endif	// VB_ENDIAN == 1234
 	return (lValue);
 }
 
@@ -635,17 +639,17 @@ stlong (long lValue, char *pcLocation)
 {
 	char	*pcTemp = (char *) &lValue;
 
-#if	VB_ENDIAN == 4321
+#if	VB_ENDIAN == 1234
 	*(pcLocation + 0) = *(pcTemp + 3);
 	*(pcLocation + 1) = *(pcTemp + 2);
 	*(pcLocation + 2) = *(pcTemp + 1);
 	*(pcLocation + 3) = *(pcTemp + 0);
-#else
+#else	// VB_ENDIAN == 1234
 	*(pcLocation + 0) = *(pcTemp + 0);
 	*(pcLocation + 1) = *(pcTemp + 1);
 	*(pcLocation + 2) = *(pcTemp + 2);
 	*(pcLocation + 3) = *(pcTemp + 3);
-#endif
+#endif	// VB_ENDIAN == 1234
 	return;
 }
 
@@ -665,11 +669,11 @@ stlong (long lValue, char *pcLocation)
 off_t
 ldquad (char *pcLocation)
 {
-	off_t	tValue;
+	off_t	tValue = 0;
 	char	*pcTemp = (char *) &tValue;
 
-#if	VB_ENDIAN == 4321
-#if	_FILE_OFFSET_BITS == 64
+#if	VB_ENDIAN == 1234
+#if	ISAMMODE == 1
 	*(pcTemp + 7) = *(pcLocation + 0);
 	*(pcTemp + 6) = *(pcLocation + 1);
 	*(pcTemp + 5) = *(pcLocation + 2);
@@ -678,14 +682,14 @@ ldquad (char *pcLocation)
 	*(pcTemp + 2) = *(pcLocation + 5);
 	*(pcTemp + 1) = *(pcLocation + 6);
 	*(pcTemp + 0) = *(pcLocation + 7);
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 	*(pcTemp + 3) = *(pcLocation + 0);
 	*(pcTemp + 2) = *(pcLocation + 1);
 	*(pcTemp + 1) = *(pcLocation + 2);
 	*(pcTemp + 0) = *(pcLocation + 3);
-#endif	// _FILE_OFFSET_BITS == 64
-#else	// VB_ENDIAN == 4321
-#if	_FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
+#else	// VB_ENDIAN == 1234
+#if	ISAMMODE == 1
 	*(pcTemp + 0) = *(pcLocation + 0);
 	*(pcTemp + 1) = *(pcLocation + 1);
 	*(pcTemp + 2) = *(pcLocation + 2);
@@ -694,13 +698,13 @@ ldquad (char *pcLocation)
 	*(pcTemp + 5) = *(pcLocation + 5);
 	*(pcTemp + 6) = *(pcLocation + 6);
 	*(pcTemp + 7) = *(pcLocation + 7);
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 	*(pcTemp + 0) = *(pcLocation + 0);
 	*(pcTemp + 1) = *(pcLocation + 1);
 	*(pcTemp + 2) = *(pcLocation + 2);
 	*(pcTemp + 3) = *(pcLocation + 3);
-#endif	// _FILE_OFFSET_BITS == 64
-#endif	// VB_ENDIAN == 4321
+#endif	// ISAMMODE == 1
+#endif	// VB_ENDIAN == 1234
 	return (tValue);
 }
 
@@ -724,8 +728,8 @@ stquad (off_t tValue, char *pcLocation)
 {
 	char	*pcTemp = (char *) &tValue;
 
-#if	VB_ENDIAN == 4321
-#if	_FILE_OFFSET_BITS == 64
+#if	VB_ENDIAN == 1234
+#if	ISAMMODE == 1
 	*(pcLocation + 0) = *(pcTemp + 7);
 	*(pcLocation + 1) = *(pcTemp + 6);
 	*(pcLocation + 2) = *(pcTemp + 5);
@@ -734,14 +738,14 @@ stquad (off_t tValue, char *pcLocation)
 	*(pcLocation + 5) = *(pcTemp + 2);
 	*(pcLocation + 6) = *(pcTemp + 1);
 	*(pcLocation + 7) = *(pcTemp + 0);
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 	*(pcLocation + 0) = *(pcTemp + 3);
 	*(pcLocation + 1) = *(pcTemp + 2);
 	*(pcLocation + 2) = *(pcTemp + 1);
 	*(pcLocation + 3) = *(pcTemp + 0);
-#endif	// _FILE_OFFSET_BITS == 64
-#else	// VB_ENDIAN == 4321
-#if	_FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
+#else	// VB_ENDIAN == 1234
+#if	ISAMMODE == 1
 	*(pcLocation + 0) = *(pcTemp + 0);
 	*(pcLocation + 1) = *(pcTemp + 1);
 	*(pcLocation + 2) = *(pcTemp + 2);
@@ -750,13 +754,13 @@ stquad (off_t tValue, char *pcLocation)
 	*(pcLocation + 5) = *(pcTemp + 5);
 	*(pcLocation + 6) = *(pcTemp + 6);
 	*(pcLocation + 7) = *(pcTemp + 7);
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 	*(pcLocation + 0) = *(pcTemp + 0);
 	*(pcLocation + 1) = *(pcTemp + 1);
 	*(pcLocation + 2) = *(pcTemp + 2);
 	*(pcLocation + 3) = *(pcTemp + 3);
-#endif	// _FILE_OFFSET_BITS == 64
-#endif	// VB_ENDIAN == 4321
+#endif	// ISAMMODE == 1
+#endif	// VB_ENDIAN == 1234
 	return;
 }
 

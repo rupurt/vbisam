@@ -9,9 +9,13 @@
  *	table.  It also implements the isaddindex () and isdelindex () as these
  *	are predominantly only called at isbuild () time.
  * Version:
- *	$Id: isbuild.c,v 1.6 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: isbuild.c,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: isbuild.c,v $
+ *	Revision 1.7  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.6  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -154,15 +158,15 @@ isbuild (char *pcFilename, int iMaxRowLength, struct keydesc *psKey, int iMode)
 	// Setup root (dictionary) node (Node 1)
 	memset (cVBNode [0], 0, MAX_NODE_LENGTH);
 	memset ((void *) &psVBFile [iHandle]->sDictNode, 0, sizeof (struct DICTNODE));
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 	psVBFile [iHandle]->sDictNode.cValidation [0] = 'V';
 	psVBFile [iHandle]->sDictNode.cValidation [1] = 'B';
 	psVBFile [iHandle]->sDictNode.cRsvdPerKey = 0x08;
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 	psVBFile [iHandle]->sDictNode.cValidation [0] = 0xfe;
 	psVBFile [iHandle]->sDictNode.cValidation [1] = 0x53;
 	psVBFile [iHandle]->sDictNode.cRsvdPerKey = 0x04;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 	psVBFile [iHandle]->sDictNode.cHeaderRsvd = 0x02;
 	psVBFile [iHandle]->sDictNode.cFooterRsvd = 0x02;
 	psVBFile [iHandle]->sDictNode.cRFU1 = 0x04;
@@ -235,12 +239,12 @@ isbuild (char *pcFilename, int iMaxRowLength, struct keydesc *psKey, int iMode)
 	{
 		// Setup key root node (Node 3)
 		memset (cVBNode [0], 0, MAX_NODE_LENGTH);
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 		stint (INTSIZE + QUADSIZE, cVBNode [0]);
 		stquad (1, cVBNode [0] + INTSIZE);		// Transaction number
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 		stint (INTSIZE, cVBNode [0]);
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 		if (iVBBlockWrite (iHandle, TRUE, (off_t) 3, cVBNode [0]))
 		{
 			iVBClose (psVBFile [iHandle]->iIndexHandle);	// Ignore ret
@@ -282,14 +286,14 @@ BUILD_ERR:
 int
 isaddindex (int iHandle, struct keydesc *psKeydesc)
 {
-	int	iResult = -1,
+	int	iResult,
 		iKeyNumber;
 
 	iResult = iVBEnter (iHandle, TRUE);
 	if (iResult)
 		return (-1);
 
-	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
+	iResult = -1;
 	iserrno = ENOTEXCL;
 	if (!(psVBFile [iHandle]->iOpenMode & ISEXCLLOCK))
 		goto AddIndexExit;
@@ -300,6 +304,7 @@ isaddindex (int iHandle, struct keydesc *psKeydesc)
 	iKeyNumber = iAddKeydescriptor (iHandle, psKeydesc);
 	if (iKeyNumber)
 		goto AddIndexExit;
+	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 	iKeyNumber = iVBCheckKey (iHandle, psKeydesc, 1, 0, 0);
 	if (iKeyNumber < 0)
 		goto AddIndexExit;
@@ -428,12 +433,12 @@ iAddKeydescriptor (int iHandle, struct keydesc *psKeydesc)
 	if (tNewNode == -1)
 		return (-1);
 	memset (cVBNode [0], 0, MAX_NODE_LENGTH);
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 	stint (INTSIZE + QUADSIZE, cVBNode [0]);
 	stquad (1, cVBNode [0] + INTSIZE);
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 	stint (INTSIZE, cVBNode [0]);
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 	iserrno = iVBBlockWrite (iHandle, TRUE, tNewNode, cVBNode [0]);
 	if (iserrno)
 		return (-1);
@@ -580,11 +585,11 @@ iDelNodes (int iHandle, int iKeyNumber, off_t tRootNode)
 	if (*(cLclNode + psVBFile [iHandle]->iNodeSize - 2))
 	{
 		iNodeUsed = ldint (cLclNode);
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 		pcSrcPtr = cLclNode + INTSIZE + QUADSIZE;
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 		pcSrcPtr = cLclNode + INTSIZE;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 		iDuplicate = FALSE;
 		while (pcSrcPtr - cLclNode < iNodeUsed)
 		{
@@ -601,27 +606,27 @@ iDelNodes (int iHandle, int iKeyNumber, off_t tRootNode)
 			iKeyLength = psKeydesc->iKeyLength;
 			if (psKeydesc->iFlags & LCOMPRESS)
 			{
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 				iCompLength = ldint (pcSrcPtr);
 				pcSrcPtr += INTSIZE;
 				iKeyLength -= (iCompLength - 2);
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 				iCompLength = *(pcSrcPtr);
 				pcSrcPtr++;
 				iKeyLength -= (iCompLength - 1);
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 			}
 			if (psKeydesc->iFlags & TCOMPRESS)
 			{
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 				iCompLength = ldint (pcSrcPtr);
 				pcSrcPtr += INTSIZE;
 				iKeyLength -= (iCompLength - 2);
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 				iCompLength = *pcSrcPtr;
 				pcSrcPtr++;
 				iKeyLength -= (iCompLength - 1);
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 			}
 			pcSrcPtr += iKeyLength;
 			if (psKeydesc->iFlags & ISDUPS)

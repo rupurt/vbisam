@@ -8,9 +8,13 @@
  *	This module handles ALL the low level index file I/O operations for the
  *	VBISAM library.
  * Version:
- *	$Id: vbIndexIO.c,v 1.6 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: vbIndexIO.c,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: vbIndexIO.c,v $
+ *	Revision 1.7  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.6  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -252,8 +256,11 @@ iVBNodeFree (int iHandle, off_t tNodeNumber)
 	iResult = iVBBlockRead (iHandle, TRUE, tHeadNode, cVBNode [0]);
 	if (iResult)
 		return (iResult);
+// Guido pointed out that C-ISAM is not 100% C-ISAM compatible (LMAO)
+#if	ISAMMODE == 1
 	if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
 		return (EBADFILE);
+#endif	// ISAMMODE == 1
 	if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 3] != -2)
 		return (EBADFILE);
 	iLengthUsed = ldint (cVBNode [0]);
@@ -335,8 +342,11 @@ iVBDataFree (int iHandle, off_t tRowNumber)
 		iResult = iVBBlockRead (iHandle, TRUE, tHeadNode, cVBNode [0]);
 		if (iResult)
 			return (iResult);
+// Guido pointed out that C-ISAM is not 100% C-ISAM compatible (LMAO)
+#if	ISAMMODE == 1
 		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
 			return (EBADFILE);
+#endif	//ISAMMODE == 1
 		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 3] != -1)
 			return (EBADFILE);
 		iLengthUsed = ldint (cVBNode [0]);
@@ -407,8 +417,11 @@ tVBNodeAllocate (int iHandle)
 		if (iserrno)
 			return (-1);
 		iserrno = EBADFILE;
+// Guido pointed out that C-ISAM is not 100% C-ISAM compatible (LMAO)
+#if	ISAMMODE == 1
 		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
 			return (-1);
+#endif	// ISAMMODE == 1
 		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 3] != -2)
 			return (-1);
 		iLengthUsed = ldint (cVBNode [0]);
@@ -478,8 +491,11 @@ tVBDataAllocate (int iHandle)
 		if (iserrno)
 			return (-1);
 		iserrno = EBADFILE;
+// Guido pointed out that C-ISAM is not 100% C-ISAM compatible (LMAO)
+#if	ISAMMODE == 1
 		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
 			return (-1);
+#endif	// ISAMMODE == 1
 		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 3] != -1)
 			return (-1);
 		iLengthUsed = ldint (cVBNode [0]);
@@ -579,8 +595,11 @@ iVBForceDataAllocate (int iHandle, off_t tRowNumber)
 		if (iserrno)
 			return (-1);
 		iserrno = EBADFILE;
+// Guido pointed out that C-ISAM is not 100% C-ISAM compatible (LMAO)
+#if	ISAMMODE == 1
 		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
 			return (-1);
+#endif	// ISAMMODE == 1
 		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 3] != -1)
 			return (-1);
 		iLengthUsed = ldint (cVBNode [0]);

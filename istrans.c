@@ -8,9 +8,13 @@
  *	This is the module that deals with all the transaction processing for
  *	a file in the VBISAM library.
  * Version:
- *	$Id: istrans.c,v 1.6 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: istrans.c,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: istrans.c,v $
+ *	Revision 1.7  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.6  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -921,6 +925,7 @@ iWriteTrans (int iTransLength, int iRollback)
 {
 static	int	iPrevLen = 0;
 static	off_t	tOffset = 0;
+	int	iResult;
 
 	iTransLength += sizeof (struct SLOGHDR) + INTSIZE;
 	stint (iTransLength, cVBTransBuffer);
@@ -943,7 +948,13 @@ static	off_t	tOffset = 0;
 		if (tVBLseek (iVBLogfileHandle, 0, SEEK_END) == -1)
 			return (ELOGWRIT);
 	}
+	iResult = iVBLock (iVBLogfileHandle, 0, 0, VBWRLCKW);
+	if (iResult)
+		return (ELOGWRIT);
 	if (tVBWrite (iVBLogfileHandle, (void *) cVBTransBuffer, (size_t) iTransLength) != (ssize_t) iTransLength)
+		return (ELOGWRIT);
+	iResult = iVBLock (iVBLogfileHandle, 0, 0, VBUNLOCK);
+	if (iResult)
 		return (ELOGWRIT);
 	if (iVBInTrans == VBBEGIN)
 		iVBInTrans = VBNEEDFLUSH;

@@ -9,9 +9,13 @@
  *	linked-lists and writing a node to disk from the memory-based linked-
  *	lists.  The latter possibly causing a split to occur.
  * Version:
- *	$Id: vbNodeMemIO.c,v 1.1 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: vbNodeMemIO.c,v 1.2 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: vbNodeMemIO.c,v $
+ *	Revision 1.2  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.1  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -23,7 +27,9 @@
  * Prototypes
  */
 int	iVBNodeLoad (int, int, struct VBTREE *, off_t, int);
-int	iVBNodeSave (int, int, struct VBTREE *, off_t);
+int	iVBNodeSave (int, int, struct VBTREE *, off_t, int, int);
+static	int	iQuickNodeSave (int, struct VBTREE *, off_t, int, int, int);
+static	void	vFixTOFEOF (int, int);
 static	int	iNodeSplit (int, int, struct VBTREE *, struct VBKEY *);
 static	int	iNewRoot (int, int, struct VBTREE *, struct VBTREE *, struct VBTREE *, struct VBKEY *[], off_t, off_t);
 #define		TCC	(' ')		// Trailing Compression Character
@@ -72,9 +78,9 @@ iVBNodeLoad (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 		*psKeyNext;
 	struct	keydesc
 		*psKeydesc;
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 	off_t	tTransNumber;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 
 	psKeydesc = psVBFile [iHandle]->psKeydesc[iKeyNumber];
 	vVBKeyValueSet (0, psKeydesc, cPrevKey);
@@ -88,14 +94,14 @@ iVBNodeLoad (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 	psTree->tNodeNumber = tNodeNumber;
 	psTree->sFlags.iLevel = *(cVBNode [0] + psVBFile [iHandle]->iNodeSize - 2);
 	iNodeLen = ldint (cVBNode [0]);
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 	pcNodePtr = cVBNode [0] + INTSIZE + QUADSIZE;
 	tTransNumber = ldquad (cVBNode [0] + INTSIZE);
 	if (tTransNumber == psTree->tTransNumber)
 		return (0);
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 	pcNodePtr = cVBNode [0] + INTSIZE;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 	for (psKey = psTree->psKeyFirst; psKey; psKey = psKeyNext)
 	{
 		if (psKey->psChild)
@@ -115,23 +121,23 @@ iVBNodeLoad (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 		{
 			if (psKeydesc->iFlags & LCOMPRESS)
 			{
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 				iCountLC = ldint (pcNodePtr);
 				pcNodePtr += INTSIZE;
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 				iCountLC = *(pcNodePtr);
 				pcNodePtr++;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 			}
 			if (psKeydesc->iFlags & TCOMPRESS)
 			{
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 				iCountTC = ldint (pcNodePtr);
 				pcNodePtr += INTSIZE;
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 				iCountTC = *(pcNodePtr);
 				pcNodePtr++;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 			}
 			memcpy (cPrevKey + iCountLC, pcNodePtr, psKeydesc->iKeyLength - (iCountLC + iCountTC));
 			memset (cPrevKey + psKeydesc->iKeyLength - iCountTC, TCC, iCountTC);
@@ -188,7 +194,7 @@ iVBNodeLoad (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 
 /*
  * Name:
- *	int	iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumber);
+ *	int	iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumber, int iMode, int iPosn);
  * Arguments:
  *	int	iHandle
  *		The open file descriptor of the VBISAM file (Not the dat file)
@@ -198,6 +204,13 @@ iVBNodeLoad (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
  *		The VBTREE structure containing data to write with this call
  *	off_t	tNodeNumber
  *		The absolute node number within the index file (1..n)
+ *	int	iMode
+ *		-1	Key deletion
+ *		0	FULL node rewrite forced
+ *		1	Key insertion
+ *	int	iPosn
+ *		n	Insertion is at the nominated position, if no form
+ *			of *COMPRESS is on the key, we can optimize it
  * Prerequisites:
  *	NONE
  * Returns:
@@ -208,7 +221,7 @@ iVBNodeLoad (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
  *	NONE known
  */
 int
-iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumber)
+iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumber, int iMode, int iPosn)
 {
 	char	*pcKeyEndPtr,
 		*pcNodePtr,
@@ -227,16 +240,34 @@ iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 	struct	keydesc
 		*psKeydesc;
 
+	psKeydesc = psVBFile [iHandle]->psKeydesc[iKeyNumber];
+	/*
+	 * If it's an INSERT into a node or a DELETE from a node
+	 *	*AND*
+	 * there's no compression
+	 *	*THEN*
+	 * We can *TRY* to do a quick and dirty insertion / deletion instead!
+	 * However, it's still possible that we have insufficient free space
+	 * so we *MAY* still need to continue.
+	 */
+	if (psTree->sFlags.iLevel)
+		if (psTree->psKeyLast->psPrev)
+			psTree->psKeyLast->psPrev->sFlags.iIsHigh = 1;
+	if (iMode && !(psKeydesc->iFlags & (DCOMPRESS | TCOMPRESS | LCOMPRESS)))
+		if (iQuickNodeSave (iHandle, psTree, tNodeNumber, psKeydesc->iKeyLength, iMode, iPosn) == 0)
+		{
+			vFixTOFEOF (iHandle, iKeyNumber);
+			return (0);
+		}
 	pcNodeHalfway = cVBNode [0] + (psVBFile [iHandle]->iNodeSize / 2);
 	pcNodeEnd = cVBNode [0] + psVBFile [iHandle]->iNodeSize - 2;
-	psKeydesc = psVBFile [iHandle]->psKeydesc[iKeyNumber];
 	memset (cVBNode [0], 0, MAX_NODE_LENGTH);
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 	stquad (ldquad (psVBFile [iHandle]->sDictNode.cTransNumber) + 1, cVBNode [0] + INTSIZE);
 	pcNodePtr = cVBNode [0] + INTSIZE + QUADSIZE;
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 	pcNodePtr = cVBNode [0] + INTSIZE;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 	*pcNodeEnd = psTree->sFlags.iLevel;
 	psTree->sFlags.iKeysInNode = 0;
 	for (psKey = psTree->psKeyFirst; psKey && !psKey->sFlags.iIsDummy; psKey = psKey->psNext)
@@ -254,11 +285,11 @@ iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 			pcKeyEndPtr = psKey->cKey + iKeyLen - 1;
 			while (*pcKeyEndPtr-- == TCC && pcKeyEndPtr != psKey->cKey)
 				iCountTC++;
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 			iKeyLen += INTSIZE - iCountTC;
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 			iKeyLen += 1 - iCountTC;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 		}
 		if (psKeydesc->iFlags & LCOMPRESS)
 		{
@@ -269,20 +300,26 @@ iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 				for (; psKey->cKey [iCountLC] == pcPrevKey [iCountLC] && iCountLC < iMaxTC; iCountLC++)
 						;
 			}
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 			iKeyLen += INTSIZE - iCountLC;
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 			iKeyLen += 1 - iCountLC;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 			if (psKey->sFlags.iIsHigh && psKeydesc->iFlags && LCOMPRESS)
 			{
 				iCountLC = psKeydesc->iKeyLength;
 				iCountTC = 0;
-#if	_FILE_OFFSET_BITS == 64
-				iKeyLen = INTSIZE * 2;
-#else	// _FILE_OFFSET_BITS == 64
-				iKeyLen = 2;
-#endif	// _FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
+				if (psKeydesc->iFlags && TCOMPRESS)
+					iKeyLen = INTSIZE * 2;
+				else
+					iKeyLen = INTSIZE;
+#else	// ISAMMODE == 1
+				if (psKeydesc->iFlags && TCOMPRESS)
+					iKeyLen = 2;
+				else
+					iKeyLen = 1;
+#endif	// ISAMMODE == 1
 				if (psKeydesc->iFlags & DCOMPRESS)
 					iKeyLen = 0;
 			}
@@ -304,6 +341,7 @@ iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 			if (psTree->psKeyLast->psPrev->sFlags.iIsHigh && psTree->psKeyLast->psPrev->psPrev->sFlags.iIsNew)
 				psKeyHalfway = psTree->psKeyLast->psPrev->psPrev->psPrev;
 			iResult = iNodeSplit (iHandle, iKeyNumber, psTree, psKeyHalfway);
+			vFixTOFEOF (iHandle, iKeyNumber);
 			return (iResult);
 		}
 		if (((iKeyLen == (QUADSIZE * 2)) && ((psKeydesc->iFlags & (DCOMPRESS | ISDUPS)) == (DCOMPRESS | ISDUPS))) || (psKeydesc->iFlags & DCOMPRESS && !(psKeydesc->iFlags & ISDUPS) && iKeyLen == QUADSIZE))
@@ -312,21 +350,21 @@ iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 		{
 			if (psKeydesc->iFlags & LCOMPRESS)
 			{
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 				stint (iCountLC, pcNodePtr);
 				pcNodePtr += INTSIZE;
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 				*pcNodePtr++ = iCountLC;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 			}
 			if (psKeydesc->iFlags & TCOMPRESS)
 			{
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 				stint (iCountTC, pcNodePtr);
 				pcNodePtr += INTSIZE;
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 				*pcNodePtr++ = iCountTC;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 			}
 			if (iCountLC != psKeydesc->iKeyLength)
 			{
@@ -339,23 +377,23 @@ iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 		}
 		if (psKeydesc->iFlags & ISDUPS)
 		{
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 			*pcNodePtr++ = (psKey->tDupNumber >> 56) & 0xff;
 			*pcNodePtr++ = (psKey->tDupNumber >> 48) & 0xff;
 			*pcNodePtr++ = (psKey->tDupNumber >> 40) & 0xff;
 			*pcNodePtr++ = (psKey->tDupNumber >> 32) & 0xff;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 			*pcNodePtr++ = (psKey->tDupNumber >> 24) & 0xff;
 			*pcNodePtr++ = (psKey->tDupNumber >> 16) & 0xff;
 			*pcNodePtr++ = (psKey->tDupNumber >> 8) & 0xff;
 			*pcNodePtr++ = psKey->tDupNumber & 0xff;
 		}
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 		*pcNodePtr++ = (psKey->tRowNode >> 56) & 0xff;
 		*pcNodePtr++ = (psKey->tRowNode >> 48) & 0xff;
 		*pcNodePtr++ = (psKey->tRowNode >> 40) & 0xff;
 		*pcNodePtr++ = (psKey->tRowNode >> 32) & 0xff;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 		*pcNodePtr++ = (psKey->tRowNode >> 24) & 0xff;
 		*pcNodePtr++ = (psKey->tRowNode >> 16) & 0xff;
 		*pcNodePtr++ = (psKey->tRowNode >> 8) & 0xff;
@@ -370,7 +408,121 @@ iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 	iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cVBNode [0]);
 	if (iResult)
 		return (iResult);
+	vFixTOFEOF (iHandle, iKeyNumber);
 	return (0);
+}
+
+/*
+ * Name:
+ *	static	int	iQuickNodeSave (int iHandle, struct VBTREE *psTree, off_t tNodeNumber, int iKeyLength, int iMode, int iPosn);
+ * Arguments:
+ *	int	iHandle
+ *		The open file descriptor of the VBISAM file (Not the dat file)
+ *	struct	VBTREE	*psTree
+ *		Used as a 'sanity' check as well as to get the key value
+ *	off_t	tNodeNumber
+ *		The node about to be read from and written to
+ *	int	iKeyLength
+ *		The length of the key about to be inserted
+ *	int	iMode
+ *		-1	Key deletion
+ *		1	Key insertion
+ *	int	iPosn
+ *		The key number being inserted / deleted (1st in node = 0)
+ * Prerequisites:
+ *	NONE
+ * Returns:
+ *	0	Success
+ *	OTHER	As per sub function calls
+ * Problems:
+ *	NONE known
+ */
+static	int
+iQuickNodeSave (int iHandle, struct VBTREE *psTree, off_t tNodeNumber, int iKeyLength, int iMode, int iPosn)
+{
+	int	iLength,
+		iPosition,
+		iResult;
+
+	// Sanity checks
+	if (!psTree || !psTree->psKeyList [iPosn])
+		return (-1);
+	if (iMode == 1 && !psTree->psKeyList [iPosn]->sFlags.iIsNew)
+		return (-1);
+	// Read in the node (hopefully from the cache too!)
+	iResult = iVBBlockRead (iHandle, TRUE, tNodeNumber, cVBNode [0]);
+	if (iResult)
+		return (iResult);
+	iLength = ldint (cVBNode [0]);
+	// Is there enough free space in the node for an insertion?
+	if (iMode == 1 && iLength + 3 + iKeyLength + QUADSIZE >= psVBFile [iHandle]->iNodeSize)
+		return (-1);
+	stint (iLength + (iMode * (iKeyLength + QUADSIZE)), cVBNode [0]);
+//printf ("%lld:%d:%02X\n", tNodeNumber, iMode, iLength + (iMode * (iKeyLength + QUADSIZE)));
+	// Calculate position for insertion / deletion of key
+#if	ISAMMODE == 1
+	iPosition = INTSIZE + QUADSIZE + (iPosn * (iKeyLength + QUADSIZE));
+#else	// ISAMMODE == 1
+	iPosition = INTSIZE + (iPosn * (iKeyLength + QUADSIZE));
+#endif	// ISAMMODE == 1
+	if (iMode == 1)
+	{
+		memmove (cVBNode [0] + iPosition + iKeyLength + QUADSIZE, cVBNode [0] + iPosition, iLength - iPosition);
+		memcpy (cVBNode [0] + iPosition, psTree->psKeyList [iPosn]->cKey, iKeyLength);
+		stquad (psTree->psKeyList [iPosn]->tRowNode, cVBNode [0] + iPosition + iKeyLength);
+	}
+	else
+	{
+		if (iLength - (iPosition + iKeyLength + QUADSIZE) > 0)
+			memmove (cVBNode [0] + iPosition, cVBNode [0] + iPosition + iKeyLength + QUADSIZE, iLength - (iPosition + iKeyLength + QUADSIZE));
+		memset (cVBNode [0] + iLength - (iKeyLength + QUADSIZE), 0, iKeyLength + QUADSIZE);
+	}
+	iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cVBNode [0]);
+	if (iResult)
+		return (iResult);
+	return (0);
+}
+
+/*
+ * Name:
+ *	static	void	vFixTOFEOF (int iHandle, int iKeyNumber);
+ * Arguments:
+ *	int	iHandle
+ *		The open file descriptor of the VBISAM file (Not the dat file)
+ *	int	iKeyNumber
+ *		GUESS!
+ * Prerequisites:
+ *	NONE
+ * Returns:
+ *	NONE
+ * Problems:
+ *	NONE known
+ */
+static	void
+vFixTOFEOF (int iHandle, int iKeyNumber)
+{
+	struct	VBTREE
+		*psTree;
+
+	psTree = psVBFile [iHandle]->psTree [iKeyNumber];
+	while (psTree)
+	{
+		psTree->sFlags.iIsTOF = TRUE;
+		if (psTree->psKeyFirst->sFlags.iIsDummy)
+			break;
+		psTree = psTree->psKeyFirst->psChild;
+	}
+	psTree = psVBFile [iHandle]->psTree [iKeyNumber];
+	while (psTree)
+	{
+		psTree->sFlags.iIsEOF = TRUE;
+		if (!psTree->sFlags.iLevel)
+			break;		// Empty file huh?
+		if (psTree->psKeyLast->psPrev)
+			psTree = psTree->psKeyLast->psPrev->psChild;
+		else
+			break;
+	}
 }
 
 /*
@@ -467,7 +619,7 @@ iNodeSplit (int iHandle, int iKeyNumber, struct VBTREE *psTree, struct VBKEY *ps
 		psKeyHalfway->psNext = psNewKey;
 		psNewKey->psPrev = psKeyHalfway;
 		psNewKey->psNext = VBKEY_NULL;
-
+psNewKey->psParent = psNewTree;	// Doubtful
 		psNewKey->sFlags.iIsDummy = 1;
 		for (psKey = psNewTree->psKeyFirst; psKey; psKey = psKey->psNext)
 		{
@@ -484,10 +636,10 @@ iNodeSplit (int iHandle, int iKeyNumber, struct VBTREE *psTree, struct VBKEY *ps
 		 * psTree is the original node and contains the HIGH half
 		 */
 		psNewTree->tNodeNumber = tNewNode1;
-		iResult = iVBNodeSave (iHandle, iKeyNumber, psNewTree, psNewTree->tNodeNumber);
+		iResult = iVBNodeSave (iHandle, iKeyNumber, psNewTree, psNewTree->tNodeNumber, 0, 0);
 		if (iResult)
 			return (iResult);
-		iResult = iVBNodeSave (iHandle, iKeyNumber, psTree, psTree->tNodeNumber);
+		iResult = iVBNodeSave (iHandle, iKeyNumber, psTree, psTree->tNodeNumber, 0, 0);
 		if (iResult)
 			return (iResult);
 		psHoldKeyCurr = psVBFile [iHandle]->psKeyCurr [iKeyNumber];
@@ -578,11 +730,11 @@ iNewRoot (int iHandle, int iKeyNumber, struct VBTREE *psTree, struct VBTREE *psN
 	for (psKey = psNewTree->psKeyFirst; psKey; psKey = psKey->psNext)
 		if (psKey->psChild)
 			psKey->psChild->psParent = psNewTree;
-	iResult = iVBNodeSave (iHandle, iKeyNumber, psNewTree, psNewTree->tNodeNumber);
+	iResult = iVBNodeSave (iHandle, iKeyNumber, psNewTree, psNewTree->tNodeNumber, 0, 0);
 	if (iResult)
 		return (iResult);
-	iResult = iVBNodeSave (iHandle, iKeyNumber, psTree, psTree->tNodeNumber);
+	iResult = iVBNodeSave (iHandle, iKeyNumber, psTree, psTree->tNodeNumber, 0, 0);
 	if (iResult)
 		return (iResult);
-	return (iVBNodeSave (iHandle, iKeyNumber, psRootTree, psRootTree->tNodeNumber));
+	return (iVBNodeSave (iHandle, iKeyNumber, psRootTree, psRootTree->tNodeNumber, 0, 0));
 }

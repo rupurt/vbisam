@@ -8,9 +8,13 @@
  *	This is the module that deals with all the writing to a file in the
  *	VBISAM library.
  * Version:
- *	$Id: iswrite.c,v 1.6 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: iswrite.c,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: iswrite.c,v $
+ *	Revision 1.7  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.6  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -181,7 +185,10 @@ iVBWriteRow (int iHandle, char *pcRow, off_t tRowNumber)
 		}
 	}
 	if (!iResult)
-		iResult = iVBTransInsert (iHandle, tRowNumber, isreclen, pcRow);
+		if (psVBFile [iHandle]->iOpenMode & ISVARLEN)
+			iResult = iVBTransInsert (iHandle, tRowNumber, isreclen, pcRow);
+		else
+			iResult = iVBTransInsert (iHandle, tRowNumber, psVBFile [iHandle]->iMinRowLength, pcRow);
 	else
 		iVBDataLock (iHandle, VBUNLOCK, tRowNumber, TRUE);
 	return (iResult);

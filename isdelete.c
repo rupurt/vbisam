@@ -8,9 +8,13 @@
  *	This is the module that deals with all the deleting from a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isdelete.c,v 1.6 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: isdelete.c,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: isdelete.c,v $
+ *	Revision 1.7  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.6  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -39,6 +43,7 @@
 int	isdelete (int, char *);
 int	isdelcurr (int);
 int	isdelrec (int, off_t);
+static	int	iProcessDelete (int, off_t);
 static	int	iRowDelete (int, off_t);
 
 /*
@@ -61,9 +66,7 @@ int
 isdelete (int iHandle, char *pcRow)
 {
 	char	cKeyValue [VB_MAX_KEYLEN];
-	int	iDeleted,
-		iResult = 0;
-	off_t	tRowNumber;
+	int	iResult = 0;
 
 	if (iVBEnter (iHandle, TRUE))
 		return (-1);
@@ -80,52 +83,11 @@ isdelete (int iHandle, char *pcRow)
 		switch (iResult)
 		{
 		case	1:	// Exact match
-			iResult = 0;
-			tRowNumber = psVBFile [iHandle]->psKeyCurr [0]->tRowNode;
-			if (psVBFile [iHandle]->iOpenMode & ISTRANS)
-			{
-				iserrno = iVBDataLock (iHandle, VBWRLOCK, tRowNumber, TRUE);
-				if (iserrno)
-				{
-					iResult = -1;
-					goto ISDeleteExit;
-				}
-			}
-			iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tRowNumber, TRUE);
-			if (!iserrno && iDeleted)
-				iserrno = ENOREC;
-			if (iserrno)
-				iResult = -1;
-			if (!iResult)
-				iResult = iRowDelete (iHandle, tRowNumber);
-			if (!iResult)
-			{
-				iVBTransDelete (iHandle, tRowNumber, isreclen);	// BUG - retval
-				memset ((void *) *(psVBFile [iHandle]->ppcRowBuffer), 0, psVBFile [iHandle]->iMinRowLength + QUADSIZE);
-				iserrno = iVBDataWrite (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), TRUE, tRowNumber, TRUE);
-				if (iserrno)
-					iResult = -1;
-			}
-			if (!iResult)
-			{
-				if (!(psVBFile [iHandle]->iOpenMode & ISTRANS) || iVBInTrans == VBNOTRANS || iVBInTrans == VBCOMMIT || iVBInTrans == VBROLLBACK)
-				{
-					iserrno = iVBDataFree (iHandle, tRowNumber);
-					if (iserrno)
-						iResult = -1;
-				}
-			}
-			if (!iResult)
-			{
-				isrecnum = tRowNumber;
-				if (tRowNumber == psVBFile [iHandle]->tRowNumber)
-					psVBFile [iHandle]->tRowNumber = 0;
-			}
+			iResult = iProcessDelete (iHandle, psVBFile [iHandle]->psKeyCurr [0]->tRowNode);
 			break;
 
 		case	0:		// LESS than
-		case	2:		// GREATER than (EOF)
-		case	3:		// EMPTY file
+		case	2:		// EMPTY file
 			iserrno = ENOREC;
 			iResult = -1;
 			break;
@@ -137,7 +99,6 @@ isdelete (int iHandle, char *pcRow)
 		}
 	}
 
-ISDeleteExit:
 	if (iResult == 0)
 		psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 	iResult |= iVBExit (iHandle);
@@ -161,56 +122,21 @@ ISDeleteExit:
 int
 isdelcurr (int iHandle)
 {
-	int	iDeleted,
-		iResult = 0;
+	int	iResult = 0;
 
 	if (iVBEnter (iHandle, TRUE))
 		return (-1);
 
 	if (psVBFile [iHandle]->tRowNumber > 0)
+		iResult = iProcessDelete (iHandle, psVBFile [iHandle]->tRowNumber);
+	else
 	{
-		if (psVBFile [iHandle]->iOpenMode & ISTRANS)
-		{
-			iserrno = iVBDataLock (iHandle, VBWRLOCK, psVBFile [iHandle]->tRowNumber, TRUE);
-			if (iserrno)
-			{
-				iResult = -1;
-				goto ISDelcurrExit;
-			}
-		}
-		iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, psVBFile [iHandle]->tRowNumber, TRUE);
-		if (!iserrno && iDeleted)
-			iserrno = ENOREC;
-		if (iserrno)
-			iResult = -1;
-		if (!iResult)
-			iResult = iRowDelete (iHandle, psVBFile [iHandle]->tRowNumber);
-		if (!iResult)
-		{
-			iVBTransDelete (iHandle, psVBFile [iHandle]->tRowNumber, isreclen);	// BUG - retval
-			memset ((void *) *(psVBFile [iHandle]->ppcRowBuffer), 0, psVBFile [iHandle]->iMinRowLength + QUADSIZE);
-			iserrno = iVBDataWrite (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), TRUE, psVBFile [iHandle]->tRowNumber, TRUE);
-			if (iserrno)
-				iResult = -1;
-		}
-		if (!iResult)
-		{
-			if (!(psVBFile [iHandle]->iOpenMode & ISTRANS) || iVBInTrans == VBNOTRANS || iVBInTrans == VBCOMMIT || iVBInTrans == VBROLLBACK)
-			{
-				iserrno = iVBDataFree (iHandle, psVBFile [iHandle]->tRowNumber);
-				if (iserrno)
-					iResult = -1;
-			}
-		}
-		if (!iResult)
-		{
-			isrecnum = psVBFile [iHandle]->tRowNumber;
-			psVBFile [iHandle]->tRowNumber = 0;
-		}
+		iserrno = ENOREC;
+		iResult = -1;
 	}
 
-	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
-ISDelcurrExit:
+	if (iResult == 0)
+		psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 	iResult |= iVBExit (iHandle);
 	return (iResult);
 }
@@ -234,59 +160,74 @@ ISDelcurrExit:
 int
 isdelrec (int iHandle, off_t tRowNumber)
 {
-	int	iDeleted,
-		iResult = 0;
+	int	iResult = 0;
 
 	if (iVBEnter (iHandle, TRUE))
 		return (-1);
 
 	if (tRowNumber > 0)
+		iResult = iProcessDelete (iHandle, tRowNumber);
+	else
 	{
-		if (psVBFile [iHandle]->iOpenMode & ISTRANS)
-		{
-			iserrno = iVBDataLock (iHandle, VBWRLOCK, tRowNumber, TRUE);
-			if (iserrno)
-			{
-				iResult = -1;
-				goto ISDelrecExit;
-			}
-		}
-		iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tRowNumber, TRUE);
-		if (!iserrno && iDeleted)
-			iserrno = ENOREC;
-		if (iserrno)
-			iResult = -1;
-		if (!iResult)
-			iResult = iRowDelete (iHandle, tRowNumber);
-		if (!iResult)
-		{
-			iVBTransDelete (iHandle, tRowNumber, isreclen);	// BUG - retval
-			memset ((void *) *(psVBFile [iHandle]->ppcRowBuffer), 0, psVBFile [iHandle]->iMinRowLength + QUADSIZE);
-			iserrno = iVBDataWrite (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), TRUE, tRowNumber, TRUE);
-			if (iserrno)
-				iResult = -1;
-		}
-		if (!iResult)
-		{
-			if (!(psVBFile [iHandle]->iOpenMode & ISTRANS) || iVBInTrans == VBNOTRANS || iVBInTrans == VBCOMMIT || iVBInTrans == VBROLLBACK)
-			{
-				iserrno = iVBDataFree (iHandle, tRowNumber);
-				if (iserrno)
-					iResult = -1;
-			}
-		}
-		if (!iResult)
-		{
-			isrecnum = tRowNumber;
-			if (tRowNumber == psVBFile [iHandle]->tRowNumber)
-				psVBFile [iHandle]->tRowNumber = 0;
-		}
+		iserrno = ENOREC;
+		iResult = -1;
 	}
 
-ISDelrecExit:
-	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
+	if (iResult == 0)
+		psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 	iResult |= iVBExit (iHandle);
 	return (iResult);
+}
+
+/*
+ * Name:
+ *	static	int	iProcessDelete (int iHandle, off_t tRowNumber);
+ * Arguments:
+ *	int	iHandle
+ *		The open file descriptor of the VBISAM file (Not the dat file)
+ *	off_t	tRowNumber
+ *		The row number to be deleted
+ * Prerequisites:
+ *	NONE
+ * Returns:
+ *	-1	Failure (iserrno contains more info)
+ *	0	Success
+ * Problems:
+ *	NONE known
+ */
+static	int
+iProcessDelete (int iHandle, off_t tRowNumber)
+{
+	int	iDeleted;
+
+	if (psVBFile [iHandle]->iOpenMode & ISTRANS)
+	{
+		iserrno = iVBDataLock (iHandle, VBWRLOCK, tRowNumber, TRUE);
+		if (iserrno)
+			return (-1);
+	}
+	iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tRowNumber, TRUE);
+	if (!iserrno && iDeleted)
+		iserrno = ENOREC;
+	if (iserrno)
+		return (-1);
+	if (iRowDelete (iHandle, tRowNumber))
+		return (-1);
+	iVBTransDelete (iHandle, tRowNumber, isreclen);	// BUG - retval
+	memset ((void *) *(psVBFile [iHandle]->ppcRowBuffer), 0, psVBFile [iHandle]->iMinRowLength + QUADSIZE);
+	iserrno = iVBDataWrite (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), TRUE, tRowNumber, TRUE);
+	if (iserrno)
+		return (-1);
+	if (!(psVBFile [iHandle]->iOpenMode & ISTRANS) || iVBInTrans == VBNOTRANS || iVBInTrans == VBCOMMIT || iVBInTrans == VBROLLBACK)
+	{
+		iserrno = iVBDataFree (iHandle, tRowNumber);
+		if (iserrno)
+			return (-1);
+	}
+	isrecnum = tRowNumber;
+	if (tRowNumber == psVBFile [iHandle]->tRowNumber)
+		psVBFile [iHandle]->tRowNumber = 0;
+	return (0);
 }
 
 /*
@@ -308,7 +249,6 @@ ISDelrecExit:
 static	int
 iRowDelete (int iHandle, off_t tRowNumber)
 {
-	char	cKeyValue [VB_MAX_KEYLEN];
 	int	iKeyNumber,
 		iResult;
 	off_t	tDupNumber [MAXSUBS];
@@ -339,13 +279,6 @@ iRowDelete (int iHandle, off_t tRowNumber)
 		iResult = iVBKeyDelete (iHandle, iKeyNumber);
 		if (iResult)
 		{
-		// Eeek, an error occured.  Let's put back what we removed!
-			while (iKeyNumber >= 0)
-			{
-				vVBMakeKey (iHandle, iKeyNumber, *(psVBFile [iHandle]->ppcRowBuffer), cKeyValue);
-				iVBKeyInsert (iHandle, VBTREE_NULL, iKeyNumber, cKeyValue, tRowNumber, tDupNumber [iKeyNumber], VBTREE_NULL);	// BUG - retval
-				iKeyNumber--;
-			}
 			iserrno = iResult;
 			return (-1);
 		}

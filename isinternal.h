@@ -8,9 +8,13 @@
  *	This is the header that defines the internally used structures for the
  *	VBISAM library.
  * Version:
- *	$Id: isinternal.h,v 1.8 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: isinternal.h,v 1.9 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: isinternal.h,v $
+ *	Revision 1.9  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.8  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -56,31 +60,40 @@
 //  suppresses re-reading and writing wherever possible
 #define	VB_CACHE_ON	1
 #define	VB_CACHE_OFF	2
-#define	VB_CACHE	VB_CACHE_OFF
+#define	VB_CACHE	VB_CACHE_ON
 
 #ifdef	VB_ENDIAN
 #undef	VB_ENDIAN
 #endif
-#ifdef	sparc
-#define	VB_ENDIAN	1234
-#endif
-#ifdef	i386
+#ifdef	hpux			// Thanks to Mikhail
 #define	VB_ENDIAN	4321
 #endif
+#ifdef	aix			// Thanks to Mikhail
+#define	VB_ENDIAN	4321
+#endif
+#ifdef	sparc			// Thanks to Hemant
+#define	VB_ENDIAN	4321
+#endif
+#ifdef	i386
+#define	VB_ENDIAN	1234
+#endif
 #ifndef	VB_ENDIAN
-#Endian-Error I do not know whether the CPU is big or little endian! HELP me!
+#error I do not know whether the CPU is big or little endian! HELP me!
 #endif
 
 // Implementation limits
 // 64-bit versions have a maximum node length of 4096 bytes
 // 32-bit versions have a maximum node length of 1024 bytes
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 # define	MAX_NODE_LENGTH	4096
 # define	MAX_KEYS_PER_NODE	((MAX_NODE_LENGTH - (INTSIZE + QUADSIZE + 2)) / (QUADSIZE + 1))
-#else	// _FILE_OFFSET_BITS == 64
+# if	_FILE_OFFSET_BITS != 64
+#error	It is REDUNDANT to use ISAMMODE = 1 if you do not ALSO use 64-bit I/O
+# endif	// _FILE_OFFSET_BITS != 64
+#else	// ISAMMODE == 1
 # define	MAX_NODE_LENGTH	1024
 # define	MAX_KEYS_PER_NODE	((MAX_NODE_LENGTH - (INTSIZE + 2)) / (QUADSIZE + 1))
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 #define	SLOTS_PER_NODE	((MAX_NODE_LENGTH >> 2) - 1)	// Used in vbVarlenIO.c
 
 #define	MAX_PATH_LENGTH	128
@@ -179,11 +192,11 @@ struct	VBTREE
 		*psNext,		// Used for the free list only!
 		*psParent;		// The next level up from this node
 	struct	VBKEY
-#if	_FILE_OFFSET_BITS == 64		// Highly non-portable.. kind of
+#if	ISAMMODE == 1			// Highly non-portable.. kind of
 		*psKeyList [512],
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 		*psKeyList [256],
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 		*psKeyFirst,		// Pointer to the FIRST key in this node
 		*psKeyLast,		// Pointer to the LAST key in this node
 		*psKeyCurr;		// Pointer to the CURRENT key
@@ -232,12 +245,12 @@ struct	DICTNODE			// Offset	32Val	64Val
 		cVarlenG2 [QUADSIZE],	// 0x45	0x71	Varies	Same
 		cVarlenG3 [QUADSIZE],	// 0x49	0x79	Varies	Same
 		cVarlenG4 [QUADSIZE],	// 0x4d	0x81	Varies	Same
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 		cVarlenG5 [QUADSIZE],	//	0x89	Varies	Same
 		cVarlenG6 [QUADSIZE],	//	0x91	Varies	Same
 		cVarlenG7 [QUADSIZE],	//	0x99	Varies	Same
 		cVarlenG8 [QUADSIZE],	//	0xa1	Varies	Same
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 		cRFULocalIndex [36];	// 0x51	0xa9	0x00...	Same
 			//		   ---- ----
 			// Length Total	   0x75	0xcd
@@ -434,8 +447,8 @@ void	vVBBlockInvalidate (int);
 void	vVBBlockDeinit (void);
 
 // vbDataIO.c
-int	iVBDataRead (int, void *, int *, off_t, int);
-int	iVBDataWrite (int, void *, int, off_t, int);
+int	iVBDataRead (int, char *, int *, off_t, int);
+int	iVBDataWrite (int, char *, int, off_t, int);
 
 // vbIndexIO.c
 int	iVBUniqueIDSet (int, off_t);
@@ -458,9 +471,8 @@ int	iVBKeyInsert (int, struct VBTREE *, int, char *, off_t, off_t, struct VBTREE
 int	iVBKeyDelete (int, int);
 int	iVBKeyCompare (int, int, int, unsigned char *, unsigned char *);
 #ifdef	DEBUG
-void	vDumpKey (struct VBKEY *, struct VBTREE *, int);
-void	vDumpTree (struct VBTREE *, int);
 int	iDumpTree (int);
+int	iChkTree (int);
 #endif	// DEBUG
 
 // vbLocking.c
@@ -499,7 +511,7 @@ void	vVBMallocReport (void);
 
 // vbNodeMemIO.c
 int	iVBNodeLoad (int, int, struct VBTREE *, off_t, int);
-int	iVBNodeSave (int, int, struct VBTREE *, off_t);
+int	iVBNodeSave (int, int, struct VBTREE *, off_t, int, int);
 
 // vbVarLenIO.c
 int	iVBVarlenRead (int, char *, off_t, int, int);

@@ -8,9 +8,13 @@
  *	This is the header that defines all the various structures et al for
  *	the VBISAM library.
  * Version:
- *	$Id: vbisam.h,v 1.6 2004/01/06 14:31:59 trev_vb Exp $
+ *	$Id: vbisam.h,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: vbisam.h,v $
+ *	Revision 1.7  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.6  2004/01/06 14:31:59  trev_vb
  *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
  *	
@@ -57,11 +61,11 @@
 #define	LONGSIZE	4
 #define	DOUBLESIZE	(sizeof (double))
 #define	FLOATSIZE	(sizeof (float))
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 #define	QUADSIZE	8
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 #define	QUADSIZE	4
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 #define	ISDESC		0x80
 
 #define	BYTEMASK	0xFF	// Mask for one byte

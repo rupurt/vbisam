@@ -8,9 +8,13 @@
  *	This is the module that deals with *ALL* memory (de-)allocation for the
  *	VBISAM library.
  * Version:
- *	$Id: vbMemIO.c,v 1.7 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: vbMemIO.c,v 1.8 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: vbMemIO.c,v $
+ *	Revision 1.8  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.7  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -35,6 +39,7 @@
  */
 #define	VBISAMMAIN
 #include	"isinternal.h"
+#include	<assert.h>
 
 static	int	iCurrHandle = -1;
 
@@ -135,10 +140,19 @@ psVBTreeAllocate (int iHandle)
 		*psTree = psTreeFree;
 
 	iCurrHandle = iHandle;
-	if (psTreeFree != VBTREE_NULL)
-		psTreeFree = psTreeFree->psNext;
-	else
+	if (psTreeFree == VBTREE_NULL)
 		psTree = (struct VBTREE *) pvVBMalloc (sizeof (struct VBTREE));
+	else
+	{
+		psTreeFree = psTreeFree->psNext;
+#ifdef	DEBUG
+		if (psTree->tNodeNumber != -1)
+		{
+			printf ("TreeAllocated that doesn't seem to be free!\n");
+			assert (FALSE);
+		}
+#endif	// DEBUG
+	}
 	iCurrHandle = -1;
 	if (psTree)
 		memset (psTree, 0, sizeof (struct VBTREE));
@@ -169,9 +183,17 @@ vVBTreeAllFree (int iHandle, int iKeyNumber, struct VBTREE *psTree)
 {
 	if (!psTree)
 		return;
+#ifdef	DEBUG
+	if (psTree->tNodeNumber == -1)
+	{
+		printf ("TreeFreed that seems to be already free!\n");
+		assert (FALSE);
+	}
+#endif	// DEBUG
 	vVBKeyAllFree (iHandle, iKeyNumber, psTree);
 	psTree->psNext = psTreeFree;
 	psTreeFree = psTree;
+	psTree->tNodeNumber = -1;
 }
 
 /*
@@ -206,7 +228,16 @@ psVBKeyAllocate (int iHandle, int iKeyNumber)
 		iCurrHandle = -1;
 	}
 	else
+	{
+#ifdef	DEBUG
+		if (psKey->tRowNode != -1)
+		{
+			printf ("KeyAllocated that doesn't seem to be free!\n");
+			assert (FALSE);
+		}
+#endif	// DEBUG
 		psVBFile [iHandle]->psKeyFree [iKeyNumber] = psVBFile [iHandle]->psKeyFree [iKeyNumber]->psNext;
+	}
 	if (psKey)
 		memset (psKey, 0, (sizeof (struct VBKEY) + iLength));
 	return (psKey);
@@ -235,11 +266,19 @@ void	vVBKeyAllFree (int iHandle, int iKeyNumber, struct VBTREE *psTree)
 
 	while (psKeyCurr)
 	{
+#ifdef	DEBUG
+		if (psKeyCurr->tRowNode == -1)
+		{
+			printf ("KeyFreed that already appears to be free!\n");
+			assert (FALSE);
+		}
+#endif	// DEBUG
 		psKeyNext = psKeyCurr->psNext;
 		if (psKeyCurr->psChild)
 			vVBTreeAllFree (iHandle, iKeyNumber, psKeyCurr->psChild);
 		psKeyCurr->psNext = psVBFile [iHandle]->psKeyFree [iKeyNumber];
 		psVBFile [iHandle]->psKeyFree [iKeyNumber] = psKeyCurr;
+		psKeyCurr->tRowNode = -1;
 		psKeyCurr = psKeyNext;
 	}
 	return;
@@ -262,6 +301,13 @@ void	vVBKeyAllFree (int iHandle, int iKeyNumber, struct VBTREE *psTree)
  */
 void	vVBKeyFree (int iHandle, int iKeyNumber, struct VBKEY *psKey)
 {
+#ifdef	DEBUG
+	if (psKey->tRowNode == -1)
+	{
+		printf ("KeyFreed that already seems to be free!\n");
+		assert (FALSE);
+	}
+#endif	// DEBUG
 	if (psKey->psChild)
 		vVBTreeAllFree (iHandle, iKeyNumber, psKey->psChild);
 	if (psKey->psNext)
@@ -270,6 +316,7 @@ void	vVBKeyFree (int iHandle, int iKeyNumber, struct VBKEY *psKey)
 		psKey->psPrev->psNext = psKey->psNext;
 	psKey->psNext = psVBFile [iHandle]->psKeyFree [iKeyNumber];
 	psVBFile [iHandle]->psKeyFree [iKeyNumber] = psKey;
+psKey->tRowNode = -1;
 	return;
 }
 

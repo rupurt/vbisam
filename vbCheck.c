@@ -7,9 +7,13 @@
  * Description:
  *	This program tests and if needed, rebuilds indexes
  * Version:
- *	$Id: vbCheck.c,v 1.1 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: vbCheck.c,v 1.2 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: vbCheck.c,v $
+ *	Revision 1.2  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.1  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -25,7 +29,8 @@ char	*gpsDataRow,		// Buffer to hold rows read
 int	giRebuildDataFree,	// If set, we need to rebuild data free list
 	giRebuildIndexFree,	// If set, we need to rebuild index free list
 	giRebuildKey [MAXSUBS];	// For any are SET, we need to rebuild that key
-off_t	gtDataSize,		// # Rows in data file
+off_t	gtLastUsedData,		// Last row USED in data file
+	gtDataSize,		// # Rows in data file
 	gtIndexSize;		// # Nodes in index file
 
 static	int
@@ -151,8 +156,6 @@ iPreamble (iHandle)
 		gtDataSize = (off_t) (sStat.st_size + psVBFile [iHandle]->iMinRowLength + INTSIZE + QUADSIZE) / (psVBFile [iHandle]->iMinRowLength + INTSIZE + QUADSIZE + 1);
 	else
 		gtDataSize = (off_t) (sStat.st_size + psVBFile [iHandle]->iMinRowLength) / (psVBFile [iHandle]->iMinRowLength + 1);
-	if (gtDataSize < ldquad (psVBFile [iHandle]->sDictNode.cDataCount))
-		gtDataSize = ldquad (psVBFile [iHandle]->sDictNode.cDataCount);
 	gpsDataMap [0] = (char *) pvVBMalloc ((int) ((gtDataSize + 7) / 8));
 	if (gpsDataMap [0] == (char *) 0)
 	{
@@ -186,7 +189,6 @@ iPreamble (iHandle)
 		return (-1);
 	}
 	memset (gpsIndexMap [0], 0, (int) ((gtIndexSize + 7) / 8));
-	iBitTestAndSet (gpsIndexMap [0], 1);	// Dictionary node!
 	switch (gtIndexSize % 8)
 	{
 	case	1:
@@ -211,6 +213,7 @@ iPreamble (iHandle)
 		*(gpsIndexMap [0] + ((gtIndexSize - 1) / 8)) = 0x01;
 		break;
 	}
+	iBitTestAndSet (gpsIndexMap [0], 1);	// Dictionary node!
 
 	return (0);
 }
@@ -222,12 +225,13 @@ iDataCheck (int iHandle)
 	off_t	tLoop;
 
 	// Mark the entries used by *LIVE* data rows
-	for (tLoop = 1; tLoop <= ldquad (psVBFile [iHandle]->sDictNode.cDataCount); tLoop++)
+	for (tLoop = 1; tLoop <= gtDataSize; tLoop++)
 	{
 		if (iVBDataRead (iHandle, gpsDataRow, &iDeleted, tLoop, FALSE))
 			continue; // A data file read error! Leave it as free!
 		if (!iDeleted)
 		{
+			gtLastUsedData = tLoop;
 			// MAYBE we could add index verification here
 			// That'd be in SUPER THOROUGH mode only!
 			iBitTestAndSet (gpsDataMap [0], tLoop);
@@ -267,8 +271,11 @@ iDataFreeCheck (int iHandle)
 		 * If the node has the WRONG signature, then we've got
 		 * a corrupt data free list.  We'll rebuild it later!
 		 */
+// Guido pointed out that C-ISAM is not 100% C-ISAM compatible (LMAO)
+#if	ISAMMODE == 1
 		if (cVBNode [0][psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
 			return (0);
+#endif	// ISAMMODE == 1
 		if (cVBNode [0][psVBFile [iHandle]->iNodeSize - 3] != -1)
 			return (0);
 		if (ldint (cVBNode [0]) > (psVBFile [iHandle]->iNodeSize - 3))
@@ -294,7 +301,7 @@ iDataFreeCheck (int iHandle)
 		tFreeHead = ldquad (cVBNode [0] + INTSIZE);
 	}
 	// Set the few bits between the last row used and EOF to 'used'
-	for (tLoop = ldquad (psVBFile [iHandle]->sDictNode.cDataCount) + 1; tLoop <= ((gtDataSize + 7) / 8) * 8; tLoop++)
+	for (tLoop = gtLastUsedData + 1; tLoop <= ((gtDataSize + 7) / 8) * 8; tLoop++)
 		iBitTestAndSet (gpsDataMap [1], tLoop);
 	for (tLoop = 0; tLoop < (gtDataSize + 7) / 8; tLoop++)
 		if (gpsDataMap [1] [tLoop] != -1)
@@ -309,12 +316,80 @@ iDataFreeCheck (int iHandle)
 }
 
 static	int
+iIndexFreeCheck (int iHandle)
+{
+	int	iLoop,
+		iResult;
+	off_t	tFreeHead,
+		tFreeNode,
+		tHoldHead;
+
+	// Mark the entries used by the free data list
+	giRebuildIndexFree = TRUE;
+	tFreeHead = ldquad (psVBFile [iHandle]->sDictNode.cNodeFree);
+	tHoldHead = tFreeHead;
+	stquad (0, psVBFile [iHandle]->sDictNode.cNodeFree);
+	memcpy (gpsIndexMap [1], gpsIndexMap [0], (int) ((gtIndexSize + 7) / 8));
+	while (tFreeHead)
+	{
+		// If the freelist node is > index.EOF, it must be bullshit!
+		if (tFreeHead > ldquad (psVBFile [iHandle]->sDictNode.cNodeCount))
+			return (0);
+		if (tFreeHead > gtIndexSize)
+			return (0);
+		iResult = iVBBlockRead (iHandle, TRUE, tFreeHead, cVBNode [0]);
+		if (iResult)
+			return (0);
+		/*
+		 * If the node has the WRONG signature, then we've got
+		 * a corrupt data free list.  We'll rebuild it later!
+		 */
+// Guido pointed out that C-ISAM is not 100% C-ISAM compatible (LMAO)
+#if	ISAMMODE == 1
+		if (cVBNode [0][psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
+			return (0);
+#endif	// ISAMMODE == 1
+		if (cVBNode [0][psVBFile [iHandle]->iNodeSize - 3] != -2)
+			return (0);
+		if (ldint (cVBNode [0]) > (psVBFile [iHandle]->iNodeSize - 3))
+			return (0);
+		/*
+		 * If the node is already 'used' then we have a corrupt
+		 * index free list (circular reference).
+		 * We'll rebuild the free list later
+		 */
+		if (iBitTestAndSet (gpsIndexMap [1], tFreeHead))
+			return (0);
+		for (iLoop = INTSIZE + QUADSIZE; iLoop < ldint (cVBNode [0]); iLoop += QUADSIZE)
+		{
+			tFreeNode = ldquad (cVBNode [0] + iLoop);
+			/*
+			 * If the row is NOT deleted, then the free
+			 * list is screwed so we ignore it and rebuild it
+			 * later.
+			 */
+			if (iBitTestAndSet (gpsIndexMap [1], tFreeNode))
+				return (0);
+		}
+		tFreeHead = ldquad (cVBNode [0] + INTSIZE);
+	}
+	// Seems the index free list is 'intact' so we'll keep the allocation lists!
+	memcpy (gpsIndexMap [0], gpsIndexMap [1], (int) ((gtIndexSize + 7) / 8));
+	stquad (tHoldHead, psVBFile [iHandle]->sDictNode.cNodeFree);
+	giRebuildIndexFree = FALSE;
+
+	return (0);
+}
+
+static	int
 iCheckKeydesc (int iHandle)
 {
 	off_t	tNode = ldquad (psVBFile [iHandle]->sDictNode.cNodeKeydesc);
 
 	while (tNode)
 	{
+		if (tNode > gtIndexSize)
+			return (1);
 		if (iBitTestAndSet (gpsIndexMap [0], tNode))
 			return (1);
 		if (iVBBlockRead (iHandle, TRUE, tNode, cVBNode [0]))
@@ -338,6 +413,8 @@ iCheckTree (int iHandle, int iKey, off_t tNode, int iLevel)
 		sTree;
 
 	memset (&sTree, 0, sizeof (sTree));
+	if (tNode > gtIndexSize)
+		return (1);
 	if (iBitTestAndSet (gpsIndexMap [1], tNode))
 		return (1);
 	sTree.tTransNumber = -1;
@@ -449,6 +526,8 @@ iIndexCheck (int iHandle)
 			else
 				printf ("\n");
 		}
+		// If the index is screwed, write out an EMPTY root node and
+		// flag the index for a complete reconstruction later on
 		if (iCheckKey (iHandle, iKey))
 		{
 			memset (cVBNode [0], 0, MAX_NODE_LENGTH);
@@ -469,6 +548,8 @@ vRebuildIndexFree (int iHandle)
 	off_t	tLoop;
 
 	printf ("Rebuilding index free list\n");
+	if (gtIndexSize > ldquad (psVBFile [iHandle]->sDictNode.cNodeCount))
+		stquad (gtIndexSize, psVBFile [iHandle]->sDictNode.cNodeCount);
 	for (tLoop = 1; tLoop <= gtIndexSize; tLoop++)
 	{
 		if (iBitTestAndSet (gpsIndexMap [0], tLoop))
@@ -489,7 +570,7 @@ vRebuildDataFree (int iHandle)
 	off_t	tLoop;
 
 	printf ("Rebuilding data free list\n");
-	for (tLoop = 0; tLoop < ldquad (psVBFile [iHandle]->sDictNode.cDataCount); tLoop++)
+	for (tLoop = 1; tLoop <= gtLastUsedData; tLoop++)
 	{
 		if (iBitTestAndSet (gpsDataMap [0], tLoop))
 			continue;
@@ -542,7 +623,7 @@ vRebuildKeys (int iHandle)
 	off_t	tRowNumber;
 
 	// Mark the entries used by *LIVE* data rows
-	for (tRowNumber = 1; tRowNumber <= ldquad (psVBFile [iHandle]->sDictNode.cDataCount); tRowNumber++)
+	for (tRowNumber = 1; tRowNumber <= gtDataSize; tRowNumber++)
 	{
 		if (iVBDataRead (iHandle, gpsDataRow, &iDeleted, tRowNumber, FALSE))
 			continue; // A data file read error! Leave it as free!
@@ -561,7 +642,6 @@ iPostamble (int iHandle)
 		iLoop;
 	off_t	tLoop;
 
-	giRebuildIndexFree = FALSE;
 	for (tLoop = 0; tLoop < (gtIndexSize + 7) / 8; tLoop++)
 		if (gpsIndexMap [0][tLoop] != -1)
 			giRebuildIndexFree = TRUE;
@@ -583,12 +663,14 @@ iPostamble (int iHandle)
 		vRebuildKeys (iHandle);
 		printf ("\n");
 	}
+	stquad (gtLastUsedData, psVBFile [iHandle]->sDictNode.cDataCount);
 	// Other stuff here
 	vVBFree (gpsDataRow, psVBFile [iHandle]->iMaxRowLength);
-	vVBFree (gpsDataMap [0], ((int) (gtDataSize / 8)));
-	vVBFree (gpsDataMap [1], ((int) (gtDataSize / 8)));
-	vVBFree (gpsIndexMap [0], ((int) (gtIndexSize / 8)));
-	vVBFree (gpsIndexMap [1], ((int) (gtIndexSize / 8)));
+	
+	vVBFree (gpsDataMap [0], ((int) ((gtDataSize + 7) / 8)));
+	vVBFree (gpsDataMap [1], ((int) ((gtDataSize + 7) / 8)));
+	vVBFree (gpsIndexMap [0], ((int) ((gtIndexSize + 7) / 8)));
+	vVBFree (gpsIndexMap [1], ((int) ((gtIndexSize + 7) / 8)));
 	return (0);
 }
 
@@ -602,6 +684,8 @@ vProcess (int iHandle)
 	if (iIndexCheck (iHandle))
 		return;
 	if (iDataFreeCheck (iHandle))
+		return;
+	if (iIndexFreeCheck (iHandle))
 		return;
 	if (iPostamble (iHandle))
 		return;
@@ -640,7 +724,10 @@ main (int iArgc, char **ppcArgv)
 		}
 
 		printf ("Processing: %s\n", ppcArgv [iLoop]);
+		iVBEnter (iHandle, TRUE);
 		vProcess (iHandle);
+		psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x06;
+		iVBExit (iHandle);
 
 		iResult = isclose (iHandle);
 		if (iResult < 0)

@@ -7,9 +7,13 @@
  * Description:
  *	This module deals with the opening and closing of VBISAM files
  * Version:
- *	$Id: isopen.c,v 1.7 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: isopen.c,v 1.8 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: isopen.c,v $
+ *	Revision 1.8  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.7  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -424,13 +428,13 @@ isopen (char *pcFilename, int iMode)
 	if (iResult)
 		goto OPEN_ERR;
 	errno = EBADFILE;
-#if	_FILE_OFFSET_BITS == 64
+#if	ISAMMODE == 1
 	if (psVBFile [iHandle]->sDictNode.cValidation [0] != 0x56 || psVBFile [iHandle]->sDictNode.cValidation [1] != 0x42)
 		goto OPEN_ERR;
-#else	// _FILE_OFFSET_BITS == 64
+#else	// ISAMMODE == 1
 	if (psVBFile [iHandle]->sDictNode.cValidation [0] != -2 || psVBFile [iHandle]->sDictNode.cValidation [1] != 0x53)
 		goto OPEN_ERR;
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	// ISAMMODE == 1
 	psFile->iNodeSize = ldint (psVBFile [iHandle]->sDictNode.cNodeSize) + 1;
 	psFile->iNKeys = ldint (psVBFile [iHandle]->sDictNode.cIndexCount);
 	psFile->iMinRowLength = ldint (psVBFile [iHandle]->sDictNode.cMinRowLength);
@@ -593,27 +597,19 @@ static	off_t
 tCountRows (int iHandle)
 {
 	int	iNodeUsed;
-	struct	FREENODE
-	{
-		char	cID [4];
-		char	cNodeUsed [INTSIZE];
-		char	cRFU [INTSIZE];
-		char	cNextNode [QUADSIZE];
-	} *psFree;
 	off_t	tNodeNumber,
 		tDataCount;
 
-	psFree = (struct FREENODE *) &cVBNode [0];
 	tNodeNumber = ldquad ((char *) psVBFile [iHandle]->sDictNode.cDataFree);
 	tDataCount = ldquad ((char *) psVBFile [iHandle]->sDictNode.cDataCount);
 	while (tNodeNumber)
 	{
 		if (iVBBlockRead (iHandle, TRUE, tNodeNumber, cVBNode [0]))
 			return (-1);
-		iNodeUsed = ldint (psFree->cNodeUsed);
-		iNodeUsed -= 4 + (INTSIZE * 2) + QUADSIZE;
+		iNodeUsed = ldint (cVBNode [0]);
+		iNodeUsed = INTSIZE + QUADSIZE;
 		tDataCount -= (iNodeUsed / QUADSIZE);
-		tNodeNumber = ldquad (psFree->cNextNode);
+		tNodeNumber = ldquad (cVBNode [0] + INTSIZE);
 	}
 	return (tDataCount);
 }

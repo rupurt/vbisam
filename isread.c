@@ -8,9 +8,13 @@
  *	This is the module that deals with all the reading from a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isread.c,v 1.6 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: isread.c,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: isread.c,v $
+ *	Revision 1.7  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.6  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -275,7 +279,10 @@ isread (int iHandle, char *pcRow, int iMode)
 		psVBFile [iHandle]->tRowStart = 0;
 		if (iMode & ISLOCK || psVBFile [iHandle]->iOpenMode & ISAUTOLOCK)
 			if (iVBDataLock (iHandle, iMode & ISWAIT ? VBWRLCKW : VBWRLOCK, psVBFile [iHandle]->psKeyCurr [iKeyNumber]->tRowNode, FALSE))
+			{
+				iResult = -1;
 				iserrno = iLockResult = ELOCKED;
+			}
 		if (!iLockResult)
 			iResult = iVBDataRead (iHandle, pcRow, &iDeleted, psVBFile [iHandle]->psKeyCurr [iKeyNumber]->tRowNode, TRUE);
 		if (!iResult && (!iLockResult || (iMode & ISSKIPLOCK && iserrno == ELOCKED)))
@@ -635,7 +642,10 @@ iStartRowNumber (int iHandle, int iMode, int iIsRead)
 			if (psVBFile [iHandle]->iOpenMode & ISAUTOLOCK || iMode & ISLOCK)
 			{
 				if (iVBDataLock (iHandle, iMode & ISWAIT ? VBWRLCKW : VBWRLOCK, isrecnum, FALSE))
+				{
 					iLockResult = ELOCKED;
+					iResult = -1;
+				}
 			}
 			if (!iLockResult)
 				iResult = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, isrecnum, TRUE);

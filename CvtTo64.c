@@ -7,9 +7,13 @@
  * Description:
  *	This program simply converts C-ISAM(R) files into VBISAM files.
  * Version:
- *	$Id: CvtTo64.c,v 1.3 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: CvtTo64.c,v 1.4 2004/06/11 22:16:16 trev_vb Exp $
  * Modification History:
  *	$Log: CvtTo64.c,v $
+ *	Revision 1.4  2004/06/11 22:16:16  trev_vb
+ *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
+ *	checkin that will not be immediately made into a release.
+ *	
  *	Revision 1.3  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -21,9 +25,9 @@
  *	
  */
 #define	VBISAM_LIB
-#if	_FILE_OFFSET_BITS != 64
-LOGIC ERROR This program is intended to be compiled *ONLY* in 64-bit mode
-#endif	// _FILE_OFFSET_BITS != 64
+#if	ISAMMODE != 1
+#error LOGIC ERROR This program is intended to be compiled *ONLY* in VBISAM mode
+#endif	// ISAMMODE != 1
 #include	"vbisam.h"
 
 char	*pcBuffer;
