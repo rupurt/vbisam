@@ -1,14 +1,18 @@
 /*
  * Title:	CvtTo64.c
  * Copyright:	(C) 2003 Trevor van Bremen
+ * License:	LGPL - See COPYING.LIB
  * Author:	Trevor van Bremen
  * Created:	11Dec2003
  * Description:
  *	This program simply converts C-ISAM(R) files into VBISAM files.
  * Version:
- *	$Id: CvtTo64.c,v 1.2 2003/12/22 04:44:30 trev_vb Exp $
+ *	$Id: CvtTo64.c,v 1.3 2004/01/05 07:36:17 trev_vb Exp $
  * Modification History:
  *	$Log: CvtTo64.c,v $
+ *	Revision 1.3  2004/01/05 07:36:17  trev_vb
+ *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
+ *	
  *	Revision 1.2  2003/12/22 04:44:30  trev_vb
  *	TvB 21Dec2003 Modified header to correct case ('Id')
  *	

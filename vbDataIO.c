@@ -1,15 +1,19 @@
 /*
  * Title:	vbDataIO.c
  * Copyright:	(C) 2003 Trevor van Bremen
+ * License:	LGPL - See COPYING.LIB
  * Author:	Trevor van Bremen
  * Created:	21Nov2003
  * Description:
  *	This module handles ALL the low level data file I/O operations for the
  *	VBISAM library.
  * Version:
- *	$Id: vbDataIO.c,v 1.4 2004/01/03 07:14:21 trev_vb Exp $
+ *	$Id: vbDataIO.c,v 1.5 2004/01/05 07:36:17 trev_vb Exp $
  * Modification History:
  *	$Log: vbDataIO.c,v $
+ *	Revision 1.5  2004/01/05 07:36:17  trev_vb
+ *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
+ *	
  *	Revision 1.4  2004/01/03 07:14:21  trev_vb
  *	TvB 02Jan2004 Ooops, I should ALWAYS try to remember to be in the RIGHT
  *	TvB 02Jan2003 directory when I check code back into CVS!!!

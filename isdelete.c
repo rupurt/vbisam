@@ -1,15 +1,19 @@
 /*
  * Title:	isdelete.c
  * Copyright:	(C) 2003 Trevor van Bremen
+ * License:	LGPL - See COPYING.LIB
  * Author:	Trevor van Bremen
  * Created:	11Dec2003
  * Description:
  *	This is the module that deals with all the deleting from a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isdelete.c,v 1.3 2004/01/03 02:28:48 trev_vb Exp $
+ *	$Id: isdelete.c,v 1.4 2004/01/05 07:36:17 trev_vb Exp $
  * Modification History:
  *	$Log: isdelete.c,v $
+ *	Revision 1.4  2004/01/05 07:36:17  trev_vb
+ *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
+ *	
  *	Revision 1.3  2004/01/03 02:28:48  trev_vb
  *	TvB 02Jan2004 WAY too many changes to enumerate!
  *	TvB 02Jan2003 Transaction processing done (excluding iscluster)

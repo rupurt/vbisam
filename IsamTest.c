@@ -1,6 +1,7 @@
 /*
  * Title:	IsamTest.c
  * Copyright:	(C) 2003 Trevor van Bremen
+ * License:	LGPL - See COPYING.LIB
  * Author:	Trevor van Bremen
  * Created:	19Dec2003
  * Description:
@@ -10,9 +11,12 @@
  *	It makes the assumption that the systables.nrows column is up-to-date.
  *	This can be achieved by way of an SQL 'update statistics;' command.
  * Version:
- *	$Id: IsamTest.c,v 1.3 2004/01/03 07:15:49 trev_vb Exp $
+ *	$Id: IsamTest.c,v 1.4 2004/01/05 07:36:17 trev_vb Exp $
  * Modification History:
  *	$Log: IsamTest.c,v $
+ *	Revision 1.4  2004/01/05 07:36:17  trev_vb
+ *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
+ *	
  *	Revision 1.3  2004/01/03 07:15:49  trev_vb
  *	TvB 02Jan2004 Added the ability to specify a single table on the commandline
  *	

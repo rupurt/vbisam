@@ -1,15 +1,19 @@
 /*
  * Title:	isinternal.h
  * Copyright:	(C) 2003 Trevor van Bremen
+ * License:	LGPL - See COPYING.LIB
  * Author:	Trevor van Bremen
  * Created:	17Nov2003
  * Description:
  *	This is the header that defines the internally used structures for the
  *	VBISAM library.
  * Version:
- *	$Id: isinternal.h,v 1.4 2004/01/03 02:28:48 trev_vb Exp $
+ *	$Id: isinternal.h,v 1.5 2004/01/05 07:36:17 trev_vb Exp $
  * Modification History:
  *	$Log: isinternal.h,v $
+ *	Revision 1.5  2004/01/05 07:36:17  trev_vb
+ *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
+ *	
  *	Revision 1.4  2004/01/03 02:28:48  trev_vb
  *	TvB 02Jan2004 WAY too many changes to enumerate!
  *	TvB 02Jan2003 Transaction processing done (excluding iscluster)

@@ -1,15 +1,19 @@
 /*
  * Title:	vbMemIO.c
  * Copyright:	(C) 2003 Trevor van Bremen
+ * License:	LGPL - See COPYING.LIB
  * Author:	Trevor van Bremen
  * Created:	08Dec2003
  * Description:
  *	This is the module that deals with *ALL* memory (de-)allocation for the
  *	VBISAM library.
  * Version:
- *	$Id: vbMemIO.c,v 1.4 2004/01/03 07:28:54 trev_vb Exp $
+ *	$Id: vbMemIO.c,v 1.5 2004/01/05 07:36:17 trev_vb Exp $
  * Modification History:
  *	$Log: vbMemIO.c,v $
+ *	Revision 1.5  2004/01/05 07:36:17  trev_vb
+ *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
+ *	
  *	Revision 1.4  2004/01/03 07:28:54  trev_vb
  *	TvB 02Jan2004 Oooops, I forgot to vVBFree the pcWriteBuffer
  *	
