@@ -7,9 +7,12 @@
  * Description:
  *	This module tests a bunch of the features of VBISAM
  * Version:
- *	$Id: MVTest.c,v 1.2 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: MVTest.c,v 1.3 2004/06/13 06:32:33 trev_vb Exp $
  * Modification History:
  *	$Log: MVTest.c,v $
+ *	Revision 1.3  2004/06/13 06:32:33  trev_vb
+ *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
+ *	
  *	Revision 1.2  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -39,7 +42,7 @@ main (int iArgc, char **ppcArgv)
 		iLoop3,
 		iHandle;
 	unsigned char
-		cRecord [100];
+		cRecord [256];
 	struct	keydesc
 		sKeydesc;
 	char	cLogfileName [100],
@@ -47,7 +50,6 @@ main (int iArgc, char **ppcArgv)
 	char	cFileName [] = "IsamTest";
 
 	memset (&sKeydesc, 0, sizeof (sKeydesc));
-	isreclen = 100;
 	sKeydesc.k_flags = COMPRESS;
 	sKeydesc.k_nparts = 1;
 	sKeydesc.k_start = 0;
@@ -63,15 +65,14 @@ main (int iArgc, char **ppcArgv)
 	if (iArgc > 1 && strcmp (ppcArgv [1], "create") == 0)
 	{
 		iserase (cFileName);
-		iHandle = isbuild (cFileName, 100, &sKeydesc, ISINOUT+ISFIXLEN+ISEXCLLOCK);
+		iHandle = isbuild (cFileName, 256, &sKeydesc, ISINOUT+ISFIXLEN+ISEXCLLOCK);
 		if (iHandle < 0)
 		{
 			fprintf (stdout, "Error creating database: %d\n", iserrno);
 			exit (-1);
 		}
 		sKeydesc.k_flags |= ISDUPS;
-		//for (sKeydesc.k_start = 1; sKeydesc.k_start < MAXSUBS; sKeydesc.k_start++)
-		for (sKeydesc.k_start = 1; sKeydesc.k_start < 4; sKeydesc.k_start++)
+		for (sKeydesc.k_start = 1; sKeydesc.k_start < MAXSUBS / 8; sKeydesc.k_start++)
 			if (isaddindex (iHandle, &sKeydesc))
 				printf ("Error adding index %d\n", sKeydesc.k_start);
 		isclose (iHandle);
@@ -80,7 +81,7 @@ main (int iArgc, char **ppcArgv)
 	// The following is sort of cheating as it *assumes* we're running *nix
 	// However, I have to admit to liking the fact that this will FAIL when
 	// using WynDoze (TvB)
-	sprintf (cLogfileName, "RECOVERY.LOG");
+	sprintf (cLogfileName, "RECOVER");
 	sprintf (cCommand, "rm -f %s; touch %s", cLogfileName, cLogfileName);
 	system (cCommand);
 	iResult = islogopen (cLogfileName);
@@ -111,11 +112,10 @@ main (int iArgc, char **ppcArgv)
 
 		for (iLoop2 = 0; iLoop2 < 100; iLoop2++)
 		{
-			memset (cRecord, rand () % 256, 100);
-			for (iLoop3 = 0; iLoop3 < MAXSUBS; iLoop3++)
+			for (iLoop3 = 0; iLoop3 < 256; iLoop3++)
 				cRecord [iLoop3] = rand () % 256;
 
-			switch (rand () % 4)
+			switch (rand () % 2)
 			{
 			case	0:
 				if ((iResult = iswrite (iHandle, (char *) cRecord)) != 0)
@@ -146,7 +146,7 @@ main (int iArgc, char **ppcArgv)
 				break;
 
 			case	2:
-				for (iLoop3 = 0; iLoop3 < MAXSUBS; iLoop3++)
+				for (iLoop3 = 0; iLoop3 < 256; iLoop3++)
 					cRecord [iLoop3] = rand () % 256;
 				if ((iResult = isrewrite (iHandle, (char *)cRecord)) != 0)
 				{
@@ -192,6 +192,7 @@ main (int iArgc, char **ppcArgv)
 			exit (-1);
 		}
 
+		//TvB switch (rand () % 1)
 		switch (rand () % 2)
 		{
 		case	0:

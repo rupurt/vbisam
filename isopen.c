@@ -7,9 +7,12 @@
  * Description:
  *	This module deals with the opening and closing of VBISAM files
  * Version:
- *	$Id: isopen.c,v 1.8 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: isopen.c,v 1.9 2004/06/13 06:32:33 trev_vb Exp $
  * Modification History:
  *	$Log: isopen.c,v $
+ *	Revision 1.9  2004/06/13 06:32:33  trev_vb
+ *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
+ *	
  *	Revision 1.8  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -159,6 +162,7 @@ iVBClose2 (int iHandle)
 	struct	VBLOCK
 		*psRowLock;
 
+	isrelease (iHandle);
 	iserrno = iVBTransClose (iHandle, psVBFile [iHandle]->cFilename);
 	if (iVBClose (psVBFile [iHandle]->iDataHandle))
 		iserrno = errno;
@@ -167,8 +171,6 @@ iVBClose2 (int iHandle)
 		iserrno = errno;
 	psVBFile [iHandle]->iIndexHandle = -1;
 	psVBFile [iHandle]->iIsOpen = 2;
-	psVBFile [iHandle]->tDataPosn = -1;
-	psVBFile [iHandle]->tIndexPosn = -1;
 	psVBFile [iHandle]->tRowNumber = -1;
 	psVBFile [iHandle]->tDupNumber = -1;
 	while (psVBFile [iHandle]->psLockHead)
@@ -311,6 +313,8 @@ isopen (char *pcFilename, int iMode)
 		iResult;
 	struct	DICTINFO
 		*psFile = (struct DICTINFO *) 0;
+	struct	stat
+		sStat;
 	off_t	tNodeNumber;
 
 	if (!iInitialized)
@@ -356,6 +360,15 @@ isopen (char *pcFilename, int iMode)
 					psVBFile [iHandle]->iIndexHandle = iVBOpen (cVBNode [0], O_RDWR, 0);
 					sprintf (cVBNode [0], "%s.dat", pcFilename);
 					psVBFile [iHandle]->iDataHandle = iVBOpen (cVBNode [0], O_RDWR, 0);
+					if (iMode & ISEXCLLOCK)
+						iResult = iVBFileOpenLock (iHandle, 2);
+					else
+						iResult = iVBFileOpenLock (iHandle, 1);
+					if (iResult)
+					{
+						errno = EFLOCKED;
+						goto OPEN_ERR;
+					}
 				}
 				psVBFile [iHandle]->iIsOpen = 0;
 				psVBFile [iHandle]->iOpenMode = iMode;
@@ -401,13 +414,13 @@ isopen (char *pcFilename, int iMode)
 	psFile->iDataHandle = -1;
 	psFile->iIndexHandle = -1;
 	sprintf (cVBNode [0], "%s.dat", pcFilename);
-	if (iVBAccess (cVBNode [0], F_OK))
+	if (iVBStat (cVBNode [0], &sStat))
 	{
 		errno = ENOENT;
 		goto OPEN_ERR;
 	}
 	sprintf (cVBNode [0], "%s.idx", pcFilename);
-	if (iVBAccess (cVBNode [0], F_OK))
+	if (iVBStat (cVBNode [0], &sStat))
 	{
 		errno = ENOENT;
 		goto OPEN_ERR;
@@ -419,8 +432,6 @@ isopen (char *pcFilename, int iMode)
 	psFile->iDataHandle = iVBOpen (cVBNode [0], O_RDWR, 0);
 	if (psFile->iDataHandle < 0)
 		goto OPEN_ERR;
-	psVBFile [iHandle]->tDataPosn = 0;
-	psVBFile [iHandle]->tIndexPosn = 0;
 	psVBFile [iHandle]->iIsOpen = 0;
 
 	psFile->iNodeSize = MAX_NODE_LENGTH;

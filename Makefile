@@ -5,9 +5,12 @@
 # Description:
 #	This is the main makefile that BUILDS all this stuff (I hope)
 # Version:
-#	$Id: Makefile,v 1.9 2004/06/11 22:16:16 trev_vb Exp $
+#	$Id: Makefile,v 1.10 2004/06/13 06:32:33 trev_vb Exp $
 # Modification History:
 #	$Log: Makefile,v $
+#	Revision 1.10  2004/06/13 06:32:33  trev_vb
+#	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
+#	
 #	Revision 1.9  2004/06/11 22:16:16  trev_vb
 #	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
 #	checkin that will not be immediately made into a release.
@@ -96,7 +99,11 @@ ${ALB}:	${OBJS} Makefile
 	${AR} srv $@ $?
 
 ${SLB}:	${OBJS} Makefile
-	${LD} -shared -o $@ ${OBJS}
+	${CC} -shared -o $@ ${OBJS}
+
+# Weird, but the following line caused me problems when I moved from using
+# access(2) to using stat(2) instead!
+#	${LD} -shared -o $@ ${OBJS}
 
 clean:
 	rm -f *.o

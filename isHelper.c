@@ -9,9 +9,12 @@
  *	Only functions with external linkage (i.e. is*, ld* and st*) should be
  *	defined within this module.
  * Version:
- *	$Id: isHelper.c,v 1.9 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: isHelper.c,v 1.10 2004/06/13 06:32:33 trev_vb Exp $
  * Modification History:
  *	$Log: isHelper.c,v $
+ *	Revision 1.10  2004/06/13 06:32:33  trev_vb
+ *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
+ *	
  *	Revision 1.9  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -251,7 +254,7 @@ isrelease (int iHandle)
 		*psLock,
 		*psLockNext;
 
-	if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen)
+	if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen > 1)
 	{
 		iserrno = ENOTOPEN;
 		return (-1);

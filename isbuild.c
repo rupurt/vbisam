@@ -9,9 +9,12 @@
  *	table.  It also implements the isaddindex () and isdelindex () as these
  *	are predominantly only called at isbuild () time.
  * Version:
- *	$Id: isbuild.c,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: isbuild.c,v 1.8 2004/06/13 06:32:33 trev_vb Exp $
  * Modification History:
  *	$Log: isbuild.c,v $
+ *	Revision 1.8  2004/06/13 06:32:33  trev_vb
+ *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
+ *	
  *	Revision 1.7  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -81,6 +84,8 @@ isbuild (char *pcFilename, int iMaxRowLength, struct keydesc *psKey, int iMode)
 		iHandle,
 		iLoop,
 		iMinRowLength;
+	struct	stat
+		sStat;
 
 	// STEP 1: Sanity checks
 	if (iMode & ISVARLEN)
@@ -127,13 +132,13 @@ isbuild (char *pcFilename, int iMaxRowLength, struct keydesc *psKey, int iMode)
 	if (iVBCheckKey (iHandle, psKey, 0, iMinRowLength, TRUE))
 		return (-1);
 	sprintf (cVBNode [0], "%s.dat", pcFilename);
-	if (!iVBAccess (cVBNode [0], F_OK))
+	if (!iVBStat (cVBNode [0], &sStat))
 	{
 		errno = EEXIST;
 		goto BUILD_ERR;
 	}
 	sprintf (cVBNode [0], "%s.idx", pcFilename);
-	if (!iVBAccess (cVBNode [0], F_OK))
+	if (!iVBStat (cVBNode [0], &sStat))
 	{
 		errno = EEXIST;
 		goto BUILD_ERR;
@@ -148,8 +153,6 @@ isbuild (char *pcFilename, int iMaxRowLength, struct keydesc *psKey, int iMode)
 		iVBClose (psVBFile [iHandle]->iIndexHandle);	// Ignore ret
 		goto BUILD_ERR;
 	}
-	psVBFile [iHandle]->tIndexPosn = 0;
-	psVBFile [iHandle]->tDataPosn = 0;
 	psVBFile [iHandle]->iNKeys = 1;
 	psVBFile [iHandle]->iNodeSize = MAX_NODE_LENGTH;
 	psVBFile [iHandle]->iOpenMode = iMode;

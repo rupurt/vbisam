@@ -13,9 +13,12 @@
  *	If VB_CACHE is VB_CACHE_ON then cached I/O is performed
  *	Otherwise, a compile error results
  * Version:
- *	$Id: vbBlockIO.c,v 1.2 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: vbBlockIO.c,v 1.3 2004/06/13 06:32:33 trev_vb Exp $
  * Modification History:
  *	$Log: vbBlockIO.c,v $
+ *	Revision 1.3  2004/06/13 06:32:33  trev_vb
+ *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
+ *	
  *	Revision 1.2  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -103,24 +106,18 @@ iVBBlockRead (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
 	 */
 	if (iIsIndex && tBlockNumber == 1 && !(psVBFile [iHandle]->iOpenMode & ISEXCLLOCK))
 	{
-		if (psVBFile [iHandle]->tIndexPosn != 0)
+		tResult = tVBLseek (psVBFile [iHandle]->iIndexHandle, 0, SEEK_SET);
+		if (tResult != 0)
 		{
-			tResult = tVBLseek (psVBFile [iHandle]->iIndexHandle, 0, SEEK_SET);
-			if (tResult != 0)
-			{
-				iserrno = errno;
-				psVBFile [iHandle]->tIndexPosn = -1;
-				return (-1);
-			}
+			iserrno = errno;
+			return (-1);
 		}
 
 		if (tVBRead (psVBFile [iHandle]->iIndexHandle, (void *) cBuffer, (size_t) sizeof (struct DICTNODE)) != (ssize_t) sizeof (struct DICTNODE))
 		{
 			iserrno = EBADFILE;
-			psVBFile [iHandle]->tIndexPosn = -1;
 			return (-1);
 		}
-		psVBFile [iHandle]->tIndexPosn = (off_t) sizeof (struct DICTNODE);
 		return (0);
 	}
 	if (iIsIndex)
@@ -163,19 +160,9 @@ iVBBlockRead (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
 	}
 	tOffset = (tBlockNumber - 1) * psVBFile [iHandle]->iNodeSize;
 	if (iIsIndex)
-	{
-		if (psVBFile [iHandle]->tIndexPosn == tOffset)
-			tResult = tOffset;
-		else
-			tResult = tVBLseek (iFileHandle, tOffset, SEEK_SET);
-	}
+		tResult = tVBLseek (iFileHandle, tOffset, SEEK_SET);
 	else
-	{
-		if (psVBFile [iHandle]->tDataPosn == tOffset)
-			tResult = tOffset;
-		else
-			tResult = tVBLseek (iFileHandle, tOffset, SEEK_SET);
-	}
+		tResult = tVBLseek (iFileHandle, tOffset, SEEK_SET);
 	if (tResult == tOffset)
 	{
 		tLength = tVBRead (iFileHandle, (void *) psBlock->cBuffer, (size_t) psVBFile [iHandle]->iNodeSize);
@@ -186,10 +173,6 @@ iVBBlockRead (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
 		}
 		if (tLength == (ssize_t) psVBFile [iHandle]->iNodeSize)
 		{
-			if (iIsIndex)
-				psVBFile [iHandle]->tIndexPosn = tOffset + psVBFile [iHandle]->iNodeSize;
-			else
-				psVBFile [iHandle]->tDataPosn = tOffset + psVBFile [iHandle]->iNodeSize;
 			memcpy (cBuffer, psBlock->cBuffer, psVBFile [iHandle]->iNodeSize);
 			psBlock->iFileHandle = iFileHandle;
 			psBlock->iHandle = iHandle;
@@ -299,23 +282,17 @@ iVBBlockWrite (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
 	}
 	if (iIsIndex && tBlockNumber == 1 && !(psVBFile [iHandle]->iOpenMode & ISEXCLLOCK))
 	{
-		if (psVBFile [iHandle]->tIndexPosn != 0)
+		if (tVBLseek (psVBFile [iHandle]->iIndexHandle, 0, SEEK_SET) != 0)
 		{
-			if (tVBLseek (psVBFile [iHandle]->iIndexHandle, 0, SEEK_SET) != 0)
-			{
-				iserrno = errno;
-				psVBFile [iHandle]->tIndexPosn = -1;
-				return (-1);
-			}
+			iserrno = errno;
+			return (-1);
 		}
 
 		if (tVBWrite (psVBFile [iHandle]->iIndexHandle, (void *) cBuffer, (size_t) sizeof (struct DICTNODE)) != (ssize_t) sizeof (struct DICTNODE))
 		{
 			iserrno = EBADFILE;
-			psVBFile [iHandle]->tIndexPosn = -1;
 			return (-1);
 		}
-		psVBFile [iHandle]->tIndexPosn = (off_t) sizeof (struct DICTNODE);
 		return (0);
 	}
 	if (psVBFile [iHandle]->sFlags.iIndexChanged == 1)
@@ -435,30 +412,14 @@ iVBBlockFlush (int iHandle)
 		iFileHandle = psBlock->iFileHandle;
 		tOffset = (psBlock->tBlockNumber - 1) * psVBFile [psBlock->iHandle]->iNodeSize;
 		if (psBlock->iIsIndex)
-		{
-			if (psVBFile [psBlock->iHandle]->tIndexPosn == tOffset)
-				tResult = tOffset;
-			else
-				tResult = tVBLseek (iFileHandle, tOffset, SEEK_SET);
-		}
+			tResult = tVBLseek (iFileHandle, tOffset, SEEK_SET);
 		else
-		{
-			if (psVBFile [psBlock->iHandle]->tDataPosn == tOffset)
-				tResult = tOffset;
-			else
-				tResult = tVBLseek (iFileHandle, tOffset, SEEK_SET);
-		}
+			tResult = tVBLseek (iFileHandle, tOffset, SEEK_SET);
 		if (tResult == tOffset)
 		{
 			tLength = tVBWrite (iFileHandle, (void *) psBlock->cBuffer, (size_t) psVBFile [psBlock->iHandle]->iNodeSize);
 			if (tLength == (ssize_t) psVBFile [psBlock->iHandle]->iNodeSize)
-			{
-				if (psBlock->iIsIndex)
-					psVBFile [psBlock->iHandle]->tIndexPosn = tOffset + psVBFile [psBlock->iHandle]->iNodeSize;
-				else
-					psVBFile [psBlock->iHandle]->tDataPosn = tOffset + psVBFile [psBlock->iHandle]->iNodeSize;
 				psBlock->iIsDirty = FALSE;
-			}
 			else
 			{
 				fprintf (stderr, "Failed to write out block %lld to the %s file of table %s!\n", psBlock->tBlockNumber, psBlock->iIsIndex ? "Index" : "Data", psVBFile [psBlock->iHandle]->cFilename);

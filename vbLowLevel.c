@@ -10,9 +10,12 @@
  *	within this module, it becomes easier to 'virtualize' the filesystem
  *	at a later date.
  * Version:
- *	$Id: vbLowLevel.c,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: vbLowLevel.c,v 1.8 2004/06/13 06:32:33 trev_vb Exp $
  * Modification History:
  *	$Log: vbLowLevel.c,v $
+ *	Revision 1.8  2004/06/13 06:32:33  trev_vb
+ *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
+ *	
  *	Revision 1.7  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -38,6 +41,16 @@
  */
 #include	"isinternal.h"
 
+static	struct
+{
+	int	iHandle,
+		iRefCount;	// How many times we are 'open'
+	dev_t	tDevice;
+	ino_t	tInode;
+	off_t	tPosn;
+} sVBFile [VB_MAX_FILES * 3];	// Enough? Hehe
+static	int	iInitialized = FALSE;
+
 /*
  * Prototypes
  */
@@ -49,7 +62,7 @@ ssize_t	tVBWrite (int, void *, size_t);
 int	iVBLock (int, off_t, off_t, int);
 int	iVBLink (char *, char *);
 int	iVBUnlink (char *);
-int	iVBAccess (char *, int);
+int	iVBStat (char *, struct stat *);
 
 /*
  * Name:
@@ -72,7 +85,50 @@ int	iVBAccess (char *, int);
 int
 iVBOpen (char *pcFilename, int iFlags, mode_t tMode)
 {
-	return (open (pcFilename, iFlags, tMode));
+	int	iLoop;
+	struct	stat
+		sStat;
+
+	if (!iInitialized)
+	{
+		iInitialized = TRUE;
+		for (iLoop = 0; iLoop < VB_MAX_FILES * 3; iLoop++)
+			sVBFile [iLoop].iRefCount = 0;
+	}
+	if (iVBStat (pcFilename, &sStat))
+	{
+		if (!iFlags & O_CREAT)
+			return (-1);
+	}
+	else
+	{
+		for (iLoop = 0; iLoop < VB_MAX_FILES * 3; iLoop++)
+		{
+			if (sVBFile [iLoop].iRefCount && sVBFile [iLoop].tDevice == sStat.st_dev && sVBFile [iLoop].tInode == sStat.st_ino)
+			{
+				sVBFile [iLoop].iRefCount++;
+				return (iLoop);
+			}
+		}
+	}
+	for (iLoop = 0; iLoop < VB_MAX_FILES * 3; iLoop++)
+	{
+		if (sVBFile [iLoop].iRefCount == 0)
+		{
+			sVBFile [iLoop].iHandle = open (pcFilename, iFlags, tMode);
+			if (sVBFile [iLoop].iHandle == -1)
+				break;
+			if (iFlags & O_CREAT && iVBStat (pcFilename, &sStat))
+				return (1);
+			sVBFile [iLoop].tDevice = sStat.st_dev;
+			sVBFile [iLoop].tInode = sStat.st_ino;
+			sVBFile [iLoop].tPosn = 0;
+			sVBFile [iLoop].iRefCount++;
+			return (iLoop);
+		}
+	}
+	errno = ENOENT;
+	return (-1);
 }
 
 /*
@@ -92,7 +148,15 @@ iVBOpen (char *pcFilename, int iFlags, mode_t tMode)
 int
 iVBClose (int iHandle)
 {
-	return (close (iHandle));
+	if (!sVBFile [iHandle].iRefCount)
+	{
+		errno = ENOENT;
+		return (-1);
+	}
+	sVBFile [iHandle].iRefCount--;
+	if (!sVBFile [iHandle].iRefCount)
+		return (close (sVBFile [iHandle].iHandle));
+	return (0);
 }
 
 /*
@@ -117,7 +181,21 @@ iVBClose (int iHandle)
 off_t
 tVBLseek (int iHandle, off_t tOffset, int iWhence)
 {
-	return (lseek (iHandle, tOffset, iWhence));
+	off_t	tNewOffset;
+
+	if (!sVBFile [iHandle].iRefCount)
+	{
+		errno = ENOENT;
+		return (-1);
+	}
+	if (sVBFile [iHandle].tPosn == tOffset && iWhence == SEEK_SET)
+		return (tOffset);	// Already there!
+	tNewOffset = lseek (sVBFile [iHandle].iHandle, tOffset, iWhence);
+	if (tNewOffset == tOffset && iWhence == SEEK_SET)
+		sVBFile [iHandle].tPosn = tNewOffset;
+	else
+		sVBFile [iHandle].tPosn = -1;
+	return (tNewOffset);
 }
 
 /*
@@ -141,7 +219,19 @@ tVBLseek (int iHandle, off_t tOffset, int iWhence)
 ssize_t
 tVBRead (int iHandle, void *pvBuffer, size_t tCount)
 {
-	return (read (iHandle, pvBuffer, tCount));
+	ssize_t	tByteCount;
+
+	if (!sVBFile [iHandle].iRefCount)
+	{
+		errno = ENOENT;
+		return (-1);
+	}
+	tByteCount = read (sVBFile [iHandle].iHandle, pvBuffer, tCount);
+	if (tByteCount == tCount)
+		sVBFile [iHandle].tPosn += tByteCount;
+	else
+		sVBFile [iHandle].tPosn = -1;
+	return (tByteCount);
 }
 
 /*
@@ -165,7 +255,19 @@ tVBRead (int iHandle, void *pvBuffer, size_t tCount)
 ssize_t
 tVBWrite (int iHandle, void *pvBuffer, size_t tCount)
 {
-	return (write (iHandle, pvBuffer, tCount));
+	ssize_t	tByteCount;
+
+	if (!sVBFile [iHandle].iRefCount)
+	{
+		errno = ENOENT;
+		return (-1);
+	}
+	tByteCount = write (sVBFile [iHandle].iHandle, pvBuffer, tCount);
+	if (tByteCount == tCount)
+		sVBFile [iHandle].tPosn += tByteCount;
+	else
+		sVBFile [iHandle].tPosn = -1;
+	return (tByteCount);
 }
 
 /*
@@ -195,6 +297,11 @@ tVBWrite (int iHandle, void *pvBuffer, size_t tCount)
 int
 iVBLock (int iHandle, off_t tOffset, off_t tLength, int iMode)
 {
+	if (!sVBFile [iHandle].iRefCount)
+	{
+		errno = ENOENT;
+		return (-1);
+	}
 	int	iCommand,
 		iType,
 		iResult = -1;
@@ -240,7 +347,7 @@ iVBLock (int iHandle, off_t tOffset, off_t tLength, int iMode)
 		sFlock.l_start = tOffset;
 		sFlock.l_len = tLength;
 		sFlock.l_pid = 0;
-		iResult = fcntl (iHandle, iCommand, &sFlock);
+		iResult = fcntl (sVBFile [iHandle].iHandle, iCommand, &sFlock);
 	}
 	return (iResult);
 }
@@ -289,12 +396,12 @@ iVBUnlink (char *pcFilename)
 
 /*
  * Name:
- *	int	iVBAccess (char *pcFilename, int iMode);
+ *	int	iVBStat (char *pcFilename, struct stat *psStat);
  * Arguments:
  *	char	*pcFilename
  *		The null terminated filename to be tested
- *	int	iMode
- *		See access(2) system call
+ *	struct	stat	*psStat
+ *		See stat(2) system call
  * Prerequisites:
  *	NONE
  * Returns:
@@ -304,7 +411,7 @@ iVBUnlink (char *pcFilename)
  *	NONE known
  */
 int
-iVBAccess (char *pcFilename, int iMode)
+iVBStat (char *pcFilename, struct stat *psStat)
 {
-	return (access (pcFilename, iMode));
+	return (stat (pcFilename, psStat));
 }

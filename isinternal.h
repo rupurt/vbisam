@@ -8,9 +8,12 @@
  *	This is the header that defines the internally used structures for the
  *	VBISAM library.
  * Version:
- *	$Id: isinternal.h,v 1.9 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: isinternal.h,v 1.10 2004/06/13 06:32:33 trev_vb Exp $
  * Modification History:
  *	$Log: isinternal.h,v $
+ *	Revision 1.10  2004/06/13 06:32:33  trev_vb
+ *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
+ *	
  *	Revision 1.9  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -263,8 +266,8 @@ struct	DICTINFO
 		iNodeSize,	// Number of bytes in an index block
 		iMinRowLength,	// Minimum data row length
 		iMaxRowLength;	// Maximum data row length
-	int	iDataHandle,	// open () file descriptor of the .dat file
-		iIndexHandle,	// open () file descriptor of the .key file
+	int	iDataHandle,	// file descriptor of the .dat file
+		iIndexHandle,	// file descriptor of the .idx file
 		iIsOpen,	// 0: Table open, Files open, Buffers OK
 				// 1: Table closed, Files open, Buffers OK
 				//	Used to retain locks
@@ -273,9 +276,7 @@ struct	DICTINFO
 		iOpenMode,	// The type of open which was used
 		iVarlenLength,	// Length of varlen component
 		iVarlenSlot;	// The slot number within tVarlenNode
-	off_t	tDataPosn,	// Used to TRY to prevent an lseek system call
-		tIndexPosn,	//  when sequential blocks are read / written
-		tRowNumber,	// Which data row is "CURRENT" 0 if none
+	off_t	tRowNumber,	// Which data row is "CURRENT" 0 if none
 		tDupNumber,	// Which duplicate number is "CURRENT" (0=First)
 		tRowStart,	// ONLY set to nonzero by isstart()
 		tTransLast,	// Used to see whether to set iIndexChanged
@@ -491,7 +492,7 @@ ssize_t	tVBWrite (int, void *, size_t);
 int	iVBLock (int, off_t, off_t, int);
 int	iVBLink (char *, char *);
 int	iVBUnlink (char *);
-int	iVBAccess (char *, int);
+int	iVBStat (char *, struct stat *);
 
 // vbMemIO.c
 struct	VBLOCK *psVBLockAllocate (int);

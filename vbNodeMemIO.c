@@ -9,9 +9,12 @@
  *	linked-lists and writing a node to disk from the memory-based linked-
  *	lists.  The latter possibly causing a split to occur.
  * Version:
- *	$Id: vbNodeMemIO.c,v 1.2 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: vbNodeMemIO.c,v 1.3 2004/06/13 06:32:33 trev_vb Exp $
  * Modification History:
  *	$Log: vbNodeMemIO.c,v $
+ *	Revision 1.3  2004/06/13 06:32:33  trev_vb
+ *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
+ *	
  *	Revision 1.2  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -28,7 +31,7 @@
  */
 int	iVBNodeLoad (int, int, struct VBTREE *, off_t, int);
 int	iVBNodeSave (int, int, struct VBTREE *, off_t, int, int);
-static	int	iQuickNodeSave (int, struct VBTREE *, off_t, int, int, int);
+static	int	iQuickNodeSave (int, struct VBTREE *, off_t, struct keydesc *, int, int);
 static	void	vFixTOFEOF (int, int);
 static	int	iNodeSplit (int, int, struct VBTREE *, struct VBKEY *);
 static	int	iNewRoot (int, int, struct VBTREE *, struct VBTREE *, struct VBTREE *, struct VBKEY *[], off_t, off_t);
@@ -254,7 +257,7 @@ iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 		if (psTree->psKeyLast->psPrev)
 			psTree->psKeyLast->psPrev->sFlags.iIsHigh = 1;
 	if (iMode && !(psKeydesc->iFlags & (DCOMPRESS | TCOMPRESS | LCOMPRESS)))
-		if (iQuickNodeSave (iHandle, psTree, tNodeNumber, psKeydesc->iKeyLength, iMode, iPosn) == 0)
+		if (iQuickNodeSave (iHandle, psTree, tNodeNumber, psKeydesc, iMode, iPosn) == 0)
 		{
 			vFixTOFEOF (iHandle, iKeyNumber);
 			return (0);
@@ -414,7 +417,7 @@ iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 
 /*
  * Name:
- *	static	int	iQuickNodeSave (int iHandle, struct VBTREE *psTree, off_t tNodeNumber, int iKeyLength, int iMode, int iPosn);
+ *	static	int	iQuickNodeSave (int iHandle, struct VBTREE *psTree, off_t tNodeNumber, struct keydesc *, int iMode, int iPosn);
  * Arguments:
  *	int	iHandle
  *		The open file descriptor of the VBISAM file (Not the dat file)
@@ -422,8 +425,8 @@ iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
  *		Used as a 'sanity' check as well as to get the key value
  *	off_t	tNodeNumber
  *		The node about to be read from and written to
- *	int	iKeyLength
- *		The length of the key about to be inserted
+ *	struct	keydesc	*psKeydesc
+ *		The key descriptor for the current key
  *	int	iMode
  *		-1	Key deletion
  *		1	Key insertion
@@ -438,9 +441,11 @@ iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
  *	NONE known
  */
 static	int
-iQuickNodeSave (int iHandle, struct VBTREE *psTree, off_t tNodeNumber, int iKeyLength, int iMode, int iPosn)
+iQuickNodeSave (int iHandle, struct VBTREE *psTree, off_t tNodeNumber, struct keydesc *psKeydesc, int iMode, int iPosn)
 {
-	int	iLength,
+	int	iDupsLength = 0,
+		iKeyLength = psKeydesc->iKeyLength,
+		iLength,
 		iPosition,
 		iResult;
 
@@ -453,29 +458,32 @@ iQuickNodeSave (int iHandle, struct VBTREE *psTree, off_t tNodeNumber, int iKeyL
 	iResult = iVBBlockRead (iHandle, TRUE, tNodeNumber, cVBNode [0]);
 	if (iResult)
 		return (iResult);
+	if (psKeydesc->iFlags & ISDUPS)
+		iDupsLength = QUADSIZE;
 	iLength = ldint (cVBNode [0]);
 	// Is there enough free space in the node for an insertion?
-	if (iMode == 1 && iLength + 3 + iKeyLength + QUADSIZE >= psVBFile [iHandle]->iNodeSize)
+	if (iMode == 1 && iLength + 3 + iKeyLength + iDupsLength + QUADSIZE >= psVBFile [iHandle]->iNodeSize)
 		return (-1);
-	stint (iLength + (iMode * (iKeyLength + QUADSIZE)), cVBNode [0]);
-//printf ("%lld:%d:%02X\n", tNodeNumber, iMode, iLength + (iMode * (iKeyLength + QUADSIZE)));
+	stint (iLength + (iMode * (iKeyLength + iDupsLength + QUADSIZE)), cVBNode [0]);
 	// Calculate position for insertion / deletion of key
 #if	ISAMMODE == 1
-	iPosition = INTSIZE + QUADSIZE + (iPosn * (iKeyLength + QUADSIZE));
+	iPosition = INTSIZE + QUADSIZE + (iPosn * (iKeyLength + iDupsLength + QUADSIZE));
 #else	// ISAMMODE == 1
-	iPosition = INTSIZE + (iPosn * (iKeyLength + QUADSIZE));
+	iPosition = INTSIZE + (iPosn * (iKeyLength + iDupsLength + QUADSIZE));
 #endif	// ISAMMODE == 1
 	if (iMode == 1)
 	{
-		memmove (cVBNode [0] + iPosition + iKeyLength + QUADSIZE, cVBNode [0] + iPosition, iLength - iPosition);
+		memmove (cVBNode [0] + iPosition + iKeyLength + iDupsLength + QUADSIZE, cVBNode [0] + iPosition, iLength - iPosition);
 		memcpy (cVBNode [0] + iPosition, psTree->psKeyList [iPosn]->cKey, iKeyLength);
-		stquad (psTree->psKeyList [iPosn]->tRowNode, cVBNode [0] + iPosition + iKeyLength);
+		if (psKeydesc->iFlags & ISDUPS)
+			stquad (psTree->psKeyList [iPosn]->tDupNumber, cVBNode [0] + iPosition + iKeyLength);
+		stquad (psTree->psKeyList [iPosn]->tRowNode, cVBNode [0] + iPosition + iKeyLength + iDupsLength);
 	}
 	else
 	{
-		if (iLength - (iPosition + iKeyLength + QUADSIZE) > 0)
-			memmove (cVBNode [0] + iPosition, cVBNode [0] + iPosition + iKeyLength + QUADSIZE, iLength - (iPosition + iKeyLength + QUADSIZE));
-		memset (cVBNode [0] + iLength - (iKeyLength + QUADSIZE), 0, iKeyLength + QUADSIZE);
+		if (iLength - (iPosition + iKeyLength + iDupsLength + QUADSIZE) > 0)
+			memmove (cVBNode [0] + iPosition, cVBNode [0] + iPosition + iKeyLength + iDupsLength + QUADSIZE, iLength - (iPosition + iKeyLength + iDupsLength + QUADSIZE));
+		memset (cVBNode [0] + iLength - (iKeyLength + QUADSIZE), 0, iKeyLength + iDupsLength + QUADSIZE);
 	}
 	iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cVBNode [0]);
 	if (iResult)
