@@ -10,9 +10,12 @@
  *	It makes the assumption that the systables.nrows column is up-to-date.
  *	This can be achieved by way of an SQL 'update statistics;' command.
  * Version:
- *	$Id: IsamTest.c,v 1.2 2003/12/22 04:45:03 trev_vb Exp $
+ *	$Id: IsamTest.c,v 1.3 2004/01/03 07:15:49 trev_vb Exp $
  * Modification History:
  *	$Log: IsamTest.c,v $
+ *	Revision 1.3  2004/01/03 07:15:49  trev_vb
+ *	TvB 02Jan2004 Added the ability to specify a single table on the commandline
+ *	
  *	Revision 1.2  2003/12/22 04:45:03  trev_vb
  *	TvB 21Dec2003 Modified header to correct case ('Id')
  *	
@@ -92,7 +95,7 @@ vProcessRows (int iHandle, long lNRows, int iIndexCount)
 		}
 		if (!isread (iHandle, cRowBuffer, ISNEXT))
 		{
-			fprintf (stderr, "\tRead additional row beyond %ld using index %d\n", lNRows, iIndexNumber);
+			fprintf (stderr, "\tRead additional row %ld beyond %ld using index %d\n", isrecnum, lNRows, iIndexNumber);
 			break;
 		}
 	}
@@ -133,26 +136,46 @@ vProcessTable (char *pcDatabaseDir)
 }
 
 void
-vProcessDatabase (char *pcDatabaseDir)
+vProcessDatabase (char *pcDatabaseDir, char *pcTableName)
 {
-	while (isread (iDBHandle, cRowBuffer, ISNEXT) == 0)
-		vProcessTable (pcDatabaseDir);
-	if (iserrno != EENDFILE)
-		fprintf (stderr, "Last read of the system catalog returned %d instead of EENDFILE\n", iserrno);
+	if (!pcTableName)
+	{
+		while (isread (iDBHandle, cRowBuffer, ISNEXT) == 0)
+			vProcessTable (pcDatabaseDir);
+		if (iserrno != EENDFILE)
+			fprintf (stderr, "Last read of the system catalog returned %d instead of EENDFILE\n", iserrno);
+		return;
+	}
+	memset (cRowBuffer, 0, 177);
+	stchar (pcTableName, cRowBuffer, 18);
+	if (isread (iDBHandle, cRowBuffer, ISGTEQ))
+	{
+		fprintf (stderr, "Could not locate table %s! Error %d\n", pcTableName, iserrno);
+		return;
+	}
+	if (memcmp (pcTableName, cRowBuffer, strlen (pcTableName)))
+	{
+		fprintf (stderr, "Could not locate table %s!\n", pcTableName);
+		return;
+	}
+	vProcessTable (pcDatabaseDir);
 	return;
 }
 
 int
 main (int iArgc, char **ppcArgv)
 {
-	if (iArgc != 2)
+	if (iArgc < 2 || iArgc > 3)
 	{
-		fprintf (stderr, "Usage: %s <DATABASE_DIR>\n", ppcArgv [0]);
+		fprintf (stderr, "Usage: %s <DATABASE_DIR> [TABLE]\n", ppcArgv [0]);
 		exit (1);
 	}
 	if (iOpenDatabase (ppcArgv [1]))
 		exit (2);
-	vProcessDatabase (ppcArgv [1]);
+	if (iArgc == 2)
+		vProcessDatabase (ppcArgv [1], (char *) 0);
+	else
+		vProcessDatabase (ppcArgv [1], ppcArgv [2]);
 	if (iCloseDatabase ())
 		exit (3);
 
