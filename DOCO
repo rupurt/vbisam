@@ -1,0 +1,151 @@
+TODO	Transaction processing
+
+TODO	Virtual filesystem
+
+TODO	Look into making the system into a shared memory based ISAM engine
+
+TODO	Still needs more work on vbIndexIO.c to deal with NodeFree / DataFree
+
+TODO	Deal with ISVARLEN files
+	Need to make cvtcisam work on VARLEN source files
+
+TODO	Merge the various cNode0, cNode1 static char variables to lower the
+	runtime RAM requirements.  This affects the following modules:
+	-	isbuild.c
+	-	isopen.c
+	-	vbIndex.c
+	-	vbKeys.c
+	-	vbLocking.c
+
+TODO	Look into limiting the namespace pollution as much as possible to avoid
+	any potential conflict with end-user processes.  Possibly by merging
+	all the various modules into one 'super-module'.  This would lead to
+	a potential downside in that any end-user program would end up linking
+	in the ENTIRE library rather than just the modules it needs.  However,
+	the current structure of modules means that this latter fact is already
+	largely true anyway.  (Possible exception being the isbuild.c module).
+
+DONE	Currently, data row locking will THRASH the fcntl due to the islock() /
+	isunlock () lock that's applied to 0-0 of the data file.  Thus any file
+	open in ISAUTOLOCK mode will require TWO locks per row!
+
+DONE	Possibly look into being able to read / write / lock genuine C-ISAM data
+	The iNodeLoad and iNodeSave functions in vbKeys.c would bear the brunt
+	of these changes.  Additionally, I should endeavor to make the locking
+	strategy C-ISAM compatible too.
+	Thus, the affected files would be:
+	-	isinternal.h
+	-	vbKeys.c
+	-	isopen.c
+	-	isbuild.c
+	-	vbIndexIO.c
+	-	vbLocking.c
+
+DONE	Possibly look at changing data file I/O to use nodes and, when possible,
+	avoid re-reading a node that's not changed.  Use a simple LRU algorithm!
+
+DONE	Change isbuild.c and isopen.c to use the sDictNode structure
+
+DONE	Deal with ISEXCLLOCK mode in isopen()
+
+DONE	Logically, I need to combine isread() amd isstart() into a single module
+
+DONE	Handle the ISDESC flag on a keypart type in iVBPartCompare ()
+
+DONE	Technically, it should be feasible for ALL of the VBISAM files open in
+	one process to *SHARE* a common row buffer and / or common index node
+	buffer(s).  This will require changes to isinternal.h (pcRowBuffer) and
+	also isopen.c
+
+DONE	Need to add in locking / exclusivity et al into:
+		isdelete.c
+		isopen.c
+		isread.c
+		isrewrite.c
+		isstart.c
+		istrans.c
+		iswrite.c
+
+vbKeys.c
+DONE	RAM utilization is somewhat EXCESSIVE... Limit this?
+DONE	A nice addition would be to make use of the QUADSIZE variable in each
+	B+ Tree node within the iNodeLoad () function to alleviate some unneeded
+	reloading.  More importantly, the iNodeLoad will require an extra arg to
+	specify if loading the node is MANDATORY or ELECTIVE
+DONE	This value would have to be set in the iNodeSave () function.
+
+================================================================================
+Where each function is located
+==============================
+isHelper.c
+----------
+TODO	iscluster (int iHandle, struct keydesc *psKeyDescription);
+	iserase (char *pcFilename);
+	isflush (int iHandle);
+	islock (int iHandle);
+	isrelease (int iHandle);
+	isrename (char *pcOldFilename, char *pcNewFilename);
+	issetunique (int iHandle, off_t tUniqueID);
+	isuniqueid (int iHandle, off_t *llUniqueID);
+	isunlock (int iHandle);
+	ldchar (char *pcSource, int iLength, char *pcDestination);
+	stchar (char *pcSource, char *pcDestination, int iLength);
+	ldint (char *pcLocation);
+	stint (int iSource, char *pcDestination);
+	long	ldlong (char *pcLocation);
+	stlong (long lSource, char *pcDestination);
+	off_t	ldquad (char *pcLocation);
+	stquad (off_t tSource, char *pcDestination);
+	double	ldfloat (char *pcLocation);
+	stfloat (double dSource, char *pcDestination);
+	double	ldfltnull (char *pcLocation, int *piNullflag);
+	stfltnull (double dSource, char *pcDestination, int iNullflag);
+	lddbl (char *pcLocation);
+	stdbl (double dSource, char *pcDestination);
+	lddblnull (char *pcLocation, int *piNullflag);
+	stdblnull (double dSource, char *pcDestination, int iNullflag);
+
+isbuild.c
+---------
+	isbuild (char *pcFilename, off_t tRowLength, struct keydesc *psKeyDescription, int iMode);
+	isaddindex (int iHandle, struct keydesc *psKeyDescription);
+	isdelindex (int iHandle, struct keydesc *psKeyDescription);
+
+isdelete.c
+----------
+	isdelete (int iHandle, char *pcRow);
+	isdelcurr (int iHandle);
+	isdelrec (int iHandle, off_t tRowNumber);
+
+isopen.c
+--------
+	isopen (char *pcFilename, int iMode);
+	isindexinfo (int iHandle, struct keydesc *psKeyDescription, int iIndexNumber);
+	isclose (int iHandle);
+	iscleanup ();
+
+isread.c
+--------
+	isread (int iHandle, char *pcRow, int iMode);
+	isstart (int iHandle, struct keydesc *psKeyDescription, int iLength, char *pcRow, int iMode);
+
+isrewrite.c
+-----------
+	isrewrite (int iHandle, char *pcRow);
+	isrewcurr (int iHandle, char *pcRow);
+	isrewrec (int iHandle, off_t tRowNumber, char *pcRow);
+
+istrans.c
+---------
+TODO	isaudit (int iHandle, char *pcFilename, int iMode);
+TODO	isbegin ();
+TODO	iscommit ();
+TODO	islogclose ();
+TODO	islogopen (char *pcLogFilename);
+TODO	isrecover ();
+TODO	isrollback ();
+
+iswrite.c
+---------
+	iswrite (int iHandle, char *pcRow);
+	iswrcurr (int iHandle, char *pcRow);
