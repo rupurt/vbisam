@@ -8,9 +8,14 @@
  *	This is the module that deals with all the deleting from a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isdelete.c,v 1.8 2004/06/16 10:53:55 trev_vb Exp $
+ *	$Id: isdelete.c,v 1.9 2004/06/22 09:41:19 trev_vb Exp $
  * Modification History:
  *	$Log: isdelete.c,v $
+ *	Revision 1.9  2004/06/22 09:41:19  trev_vb
+ *	22June2004 TvB Lowered the scope of the iVBDataRead since we only need to
+ *	22June2004 TvB know if the row was previously delted or not.  Thus, the
+ *	22June2004 TvB varlen extension data is NOT needed.
+ *	
  *	Revision 1.8  2004/06/16 10:53:55  trev_vb
  *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
  *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
@@ -210,7 +215,7 @@ iProcessDelete (int iHandle, off_t tRowNumber)
 		if (iserrno)
 			return (-1);
 	}
-	iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tRowNumber, TRUE);
+	iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tRowNumber, FALSE);
 	if (!iserrno && iDeleted)
 		iserrno = ENOREC;
 	if (iserrno)
