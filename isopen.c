@@ -6,11 +6,14 @@
  * Description:
  *	This module deals with the opening and closing of VBISAM files
  * Version:
- *	$ID$
+ *	$Id: isopen.c,v 1.2 2003/12/22 04:47:11 trev_vb Exp $
  * Modification History:
  *	$Log: isopen.c,v $
- *	Revision 1.1  2003/12/20 20:11:21  trev_vb
- *	Initial revision
+ *	Revision 1.2  2003/12/22 04:47:11  trev_vb
+ *	TvB 21Dec2003 Modified header to correct case ('Id')
+ *	
+ *	Revision 1.1.1.1  2003/12/20 20:11:21  trev_vb
+ *	Init import
  *	
  */
 #include	"isinternal.h"

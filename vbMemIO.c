@@ -7,11 +7,14 @@
  *	This is the module that deals with *ALL* memory (de-)allocation for the
  *	VBISAM library.
  * Version:
- *	$ID$
+ *	$Id: vbMemIO.c,v 1.2 2003/12/22 04:49:30 trev_vb Exp $
  * Modification History:
  *	$Log: vbMemIO.c,v $
- *	Revision 1.1  2003/12/20 20:11:20  trev_vb
- *	Initial revision
+ *	Revision 1.2  2003/12/22 04:49:30  trev_vb
+ *	TvB 21Dec2003 Modified header to correct case ('Id')
+ *	
+ *	Revision 1.1.1.1  2003/12/20 20:11:20  trev_vb
+ *	Init import
  *	
  * BUG - We need to add in a 'garbage collection' function in this module to
  * BUG -  traverse the various free lists periodically and free them up.

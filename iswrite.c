@@ -7,11 +7,14 @@
  *	This is the module that deals with all the writing to a file in the
  *	VBISAM library.
  * Version:
- *	$ID$
+ *	$Id: iswrite.c,v 1.2 2003/12/22 04:48:02 trev_vb Exp $
  * Modification History:
  *	$Log: iswrite.c,v $
- *	Revision 1.1  2003/12/20 20:11:20  trev_vb
- *	Initial revision
+ *	Revision 1.2  2003/12/22 04:48:02  trev_vb
+ *	TvB 21Dec2003 Modified header to correct case ('Id')
+ *	
+ *	Revision 1.1.1.1  2003/12/20 20:11:20  trev_vb
+ *	Init import
  *	
  */
 #include	"isinternal.h"

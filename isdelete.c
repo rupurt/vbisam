@@ -7,11 +7,14 @@
  *	This is the module that deals with all the deleting from a file in the
  *	VBISAM library.
  * Version:
- *	$ID$
+ *	$Id: isdelete.c,v 1.2 2003/12/22 04:46:09 trev_vb Exp $
  * Modification History:
  *	$Log: isdelete.c,v $
- *	Revision 1.1  2003/12/20 20:11:18  trev_vb
- *	Initial revision
+ *	Revision 1.2  2003/12/22 04:46:09  trev_vb
+ *	TvB 21Dec2003 Modified header to correct case ('Id')
+ *	
+ *	Revision 1.1.1.1  2003/12/20 20:11:18  trev_vb
+ *	Init import
  *	
  */
 #include	"isinternal.h"

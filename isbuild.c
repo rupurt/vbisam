@@ -8,11 +8,14 @@
  *	table.  It also implements the isaddindex () and isdelindex () as these
  *	are predominantly only called at isbuild () time.
  * Version:
- *	$ID$
+ *	$Id: isbuild.c,v 1.2 2003/12/22 04:45:50 trev_vb Exp $
  * Modification History:
  *	$Log: isbuild.c,v $
- *	Revision 1.1  2003/12/20 20:11:20  trev_vb
- *	Initial revision
+ *	Revision 1.2  2003/12/22 04:45:50  trev_vb
+ *	TvB 21Dec2003 Modified header to correct case ('Id')
+ *	
+ *	Revision 1.1.1.1  2003/12/20 20:11:20  trev_vb
+ *	Init import
  *	
  */
 #include	"isinternal.h"

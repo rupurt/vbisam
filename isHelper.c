@@ -8,11 +8,14 @@
  *	Only functions with external linkage (i.e. is*, ld* and st*) should be
  *	defined within this module.
  * Version:
- *	$ID$
+ *	$Id: isHelper.c,v 1.2 2003/12/22 04:45:31 trev_vb Exp $
  * Modification History:
  *	$Log: isHelper.c,v $
- *	Revision 1.1  2003/12/20 20:11:19  trev_vb
- *	Initial revision
+ *	Revision 1.2  2003/12/22 04:45:31  trev_vb
+ *	TvB 21Dec2003 Modified header to correct case ('Id')
+ *	
+ *	Revision 1.1.1.1  2003/12/20 20:11:19  trev_vb
+ *	Init import
  *	
  */
 #include	"isinternal.h"

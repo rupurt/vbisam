@@ -10,11 +10,14 @@
  *	It makes the assumption that the systables.nrows column is up-to-date.
  *	This can be achieved by way of an SQL 'update statistics;' command.
  * Version:
- *	$ID$
+ *	$Id: IsamTest.c,v 1.2 2003/12/22 04:45:03 trev_vb Exp $
  * Modification History:
  *	$Log: IsamTest.c,v $
- *	Revision 1.1  2003/12/20 20:11:18  trev_vb
- *	Initial revision
+ *	Revision 1.2  2003/12/22 04:45:03  trev_vb
+ *	TvB 21Dec2003 Modified header to correct case ('Id')
+ *	
+ *	Revision 1.1.1.1  2003/12/20 20:11:18  trev_vb
+ *	Init import
  *	
  */
 #include	"isinternal.h"

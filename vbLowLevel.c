@@ -11,11 +11,14 @@
  *	In addition, it also performs the node-buffering in order to lower the
  *	quantity of lseek and read system calls required.
  * Version:
- *	$ID$
+ *	$Id: vbLowLevel.c,v 1.2 2003/12/22 04:49:04 trev_vb Exp $
  * Modification History:
  *	$Log: vbLowLevel.c,v $
- *	Revision 1.1  2003/12/20 20:11:18  trev_vb
- *	Initial revision
+ *	Revision 1.2  2003/12/22 04:49:04  trev_vb
+ *	TvB 21Dec2003 Modified header to correct case ('Id')
+ *	
+ *	Revision 1.1.1.1  2003/12/20 20:11:18  trev_vb
+ *	Init import
  *	
  */
 #include	"isinternal.h"
