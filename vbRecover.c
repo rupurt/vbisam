@@ -7,9 +7,12 @@
  * Description:
  *	This module tests a bunch of the features of VBISAM
  * Version:
- *	$Id: vbRecover.c,v 1.1 2004/06/06 20:52:21 trev_vb Exp $
+ *	$Id: vbRecover.c,v 1.2 2004/06/06 20:59:21 trev_vb Exp $
  * Modification History:
  *	$Log: vbRecover.c,v $
+ *	Revision 1.2  2004/06/06 20:59:21  trev_vb
+ *	06Jun2004 TvB Grrr, had a 'wee issue' in vbRecover... Sorry!
+ *	
  *	Revision 1.1  2004/06/06 20:52:21  trev_vb
  *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
@@ -27,6 +30,8 @@ main (int iArgc, char **ppcArgv)
 	if (iArgc != 2)
 	{
 		printf ("Usage: %s <LOGFILE>\n", ppcArgv [0]);
+		exit (1);
+	}
 	sprintf (cLogfileName, "%s", ppcArgv [1]);
 	iResult = islogopen (cLogfileName);
 	if (iResult < 0)
