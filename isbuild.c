@@ -8,9 +8,13 @@
  *	table.  It also implements the isaddindex () and isdelindex () as these
  *	are predominantly only called at isbuild () time.
  * Version:
- *	$Id: isbuild.c,v 1.2 2003/12/22 04:45:50 trev_vb Exp $
+ *	$Id: isbuild.c,v 1.3 2004/01/03 02:28:48 trev_vb Exp $
  * Modification History:
  *	$Log: isbuild.c,v $
+ *	Revision 1.3  2004/01/03 02:28:48  trev_vb
+ *	TvB 02Jan2004 WAY too many changes to enumerate!
+ *	TvB 02Jan2003 Transaction processing done (excluding iscluster)
+ *	
  *	Revision 1.2  2003/12/22 04:45:50  trev_vb
  *	TvB 21Dec2003 Modified header to correct case ('Id')
  *	
@@ -109,24 +113,24 @@ isbuild (char *pcFilename, int iMaxRowLength, struct keydesc *psKey, int iMode)
 	iserrno = EBADARG;
 	if (iVBCheckKey (iHandle, psKey, 0, iMinRowLength, TRUE))
 		return (-1);
-	sprintf (cNode0, "%s.idx", pcFilename);
-	if (!iVBAccess (cNode0, F_OK))
-	{
-		errno = EEXIST;
-		goto BUILD_ERR;
-	}
 	sprintf (cNode0, "%s.dat", pcFilename);
 	if (!iVBAccess (cNode0, F_OK))
 	{
 		errno = EEXIST;
 		goto BUILD_ERR;
 	}
-	psVBFile [iHandle]->iDataHandle = iVBOpen (cNode0, iFlags | O_CREAT, 0666);
-	if (psVBFile [iHandle]->iDataHandle < 0)
-		goto BUILD_ERR;
 	sprintf (cNode0, "%s.idx", pcFilename);
+	if (!iVBAccess (cNode0, F_OK))
+	{
+		errno = EEXIST;
+		goto BUILD_ERR;
+	}
 	psVBFile [iHandle]->iIndexHandle = iVBOpen (cNode0, iFlags | O_CREAT, 0666);
 	if (psVBFile [iHandle]->iIndexHandle < 0)
+		goto BUILD_ERR;
+	sprintf (cNode0, "%s.dat", pcFilename);
+	psVBFile [iHandle]->iDataHandle = iVBOpen (cNode0, iFlags | O_CREAT, 0666);
+	if (psVBFile [iHandle]->iDataHandle < 0)
 		goto BUILD_ERR;
 	psVBFile [iHandle]->tIndexPosn = -1;
 	psVBFile [iHandle]->tDataPosn = -1;
@@ -166,7 +170,10 @@ isbuild (char *pcFilename, int iMaxRowLength, struct keydesc *psKey, int iMode)
 	stquad (1, psVBFile [iHandle]->sDictNode.cUniqueID);
 	stquad (0, psVBFile [iHandle]->sDictNode.cNodeAudit);
 	stint (0x0008, psVBFile [iHandle]->sDictNode.cLockMethod);
-	stint (iMaxRowLength, psVBFile [iHandle]->sDictNode.cMaxRowLength);
+	if (iMode & ISVARLEN)
+		stint (iMaxRowLength, psVBFile [iHandle]->sDictNode.cMaxRowLength);
+	else
+		stint (0, psVBFile [iHandle]->sDictNode.cMaxRowLength);
 	memcpy (cNode0, &psVBFile [iHandle]->sDictNode, sizeof (struct DICTNODE));
 	//iVBNodeWrite (iHandle, (void *) cNode0, (off_t) 1);
 	iVBBlockWrite (iHandle, TRUE, (off_t) 1, cNode0);
@@ -218,6 +225,7 @@ isbuild (char *pcFilename, int iMaxRowLength, struct keydesc *psKey, int iMode)
 
 	isclose (iHandle);
 	iserrno = 0;
+	iVBTransBuild (pcFilename, iMinRowLength, iMaxRowLength, psKey);
 	return (isopen (pcFilename, iMode));
 BUILD_ERR:
 	if (psVBFile [iHandle] != (struct DICTINFO *) 0)
@@ -232,7 +240,7 @@ BUILD_ERR:
  *	int	isaddindex (int iHandle, struct keydesc *psKeydesc);
  * Arguments:
  *	int	iHandle
- *		The handle of a currently isopen VBISAM file
+ *		The handle of a currently open VBISAM file
  *	struct keydesc *psKey
  *		The definition of the key to be added
  * Prerequisites:
@@ -289,6 +297,7 @@ isaddindex (int iHandle, struct keydesc *psKeydesc)
 		goto AddIndexExit;
 	}
 	iserrno = 0;
+	iVBTransCreateIndex (iHandle, psKeydesc);
 
 AddIndexExit:
 	iVBExit (iHandle);
@@ -302,7 +311,7 @@ AddIndexExit:
  *	int	isdelindex (int iHandle, struct keydesc *psKeydesc);
  * Arguments:
  *	int	iHandle
- *		The handle of a currently isopen VBISAM file
+ *		The handle of a currently open VBISAM file
  *	struct keydesc *psKey
  *		The definition of the key to be removed
  * Prerequisites:
@@ -325,12 +334,13 @@ isdelindex (int iHandle, struct keydesc *psKeydesc)
 	if (iResult)
 		return (-1);
 
+	iResult = -1;
 	if (!(psVBFile [iHandle]->iOpenMode & ISEXCLLOCK))
 	{
 		iserrno = ENOTEXCL;
 		goto DelIndexExit;
 	}
-	iKeyNumber = iVBCheckKey (iHandle, psKeydesc, 1, 0, 0);
+	iKeyNumber = iVBCheckKey (iHandle, psKeydesc, 2, 0, 0);
 	if (iKeyNumber == -1)
 	{
 		iserrno = EKEXISTS;
@@ -362,6 +372,7 @@ isdelindex (int iHandle, struct keydesc *psKeydesc)
 	psVBFile [iHandle]->iNKeys--;
 	stint (psVBFile [iHandle]->iNKeys, psVBFile [iHandle]->sDictNode.cIndexCount);
 	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
+	iVBTransDeleteIndex (iHandle, psKeydesc);
 
 DelIndexExit:
 	iVBExit (iHandle);

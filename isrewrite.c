@@ -7,9 +7,13 @@
  *	This is the module that deals with all the rewriting to a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isrewrite.c,v 1.2 2003/12/22 04:47:34 trev_vb Exp $
+ *	$Id: isrewrite.c,v 1.3 2004/01/03 02:28:48 trev_vb Exp $
  * Modification History:
  *	$Log: isrewrite.c,v $
+ *	Revision 1.3  2004/01/03 02:28:48  trev_vb
+ *	TvB 02Jan2004 WAY too many changes to enumerate!
+ *	TvB 02Jan2003 Transaction processing done (excluding iscluster)
+ *	
  *	Revision 1.2  2003/12/22 04:47:34  trev_vb
  *	TvB 21Dec2003 Modified header to correct case ('Id')
  *	
@@ -64,7 +68,14 @@ isrewrite (int iHandle, char *pcRow)
 		{
 		case	1:	// Exact match
 			tRowNumber = psVBFile [iHandle]->psKeyCurr [0]->tRowNode;
-			iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tRowNumber, FALSE);
+			if (iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
+			{
+				iserrno = iVBDataLock (iHandle, VBWRLOCK, tRowNumber, TRUE);
+				if (!iserrno)
+					iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tRowNumber, TRUE);
+			}
+			else
+				iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tRowNumber, TRUE);
 			if (!iserrno && iDeleted)
 				iserrno = ENOREC;
 			if (iserrno)
@@ -76,6 +87,8 @@ isrewrite (int iHandle, char *pcRow)
 				isrecnum = tRowNumber;
 				iResult = iVBDataWrite (iHandle, (void *) pcRow, FALSE, isrecnum, TRUE);
 			}
+			if (!iResult && iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
+				iVBTransUpdate (iHandle, tRowNumber, psVBFile [iHandle]->iMinRowLength, psVBFile [iHandle]->iMinRowLength, pcRow);		// BUG - Not varlen compliant!
 			break;
 
 		case	0:		// LESS than
@@ -92,6 +105,7 @@ isrewrite (int iHandle, char *pcRow)
 		}
 	}
 
+	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
 	iVBExit (iHandle);
 	return (iResult);
 }
@@ -124,7 +138,14 @@ isrewcurr (int iHandle, char *pcRow)
 
 	if (psVBFile [iHandle]->tRowNumber > 0)
 	{
-		iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, psVBFile [iHandle]->tRowNumber, FALSE);
+		if (iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
+		{
+			iserrno = iVBDataLock (iHandle, VBWRLOCK, psVBFile [iHandle]->tRowNumber, TRUE);
+			if (!iserrno)
+				iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, psVBFile [iHandle]->tRowNumber, TRUE);
+		}
+		else
+			iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, psVBFile [iHandle]->tRowNumber, TRUE);
 		if (!iserrno && iDeleted)
 			iserrno = ENOREC;
 		if (iserrno)
@@ -137,7 +158,10 @@ isrewcurr (int iHandle, char *pcRow)
 		isrecnum = psVBFile [iHandle]->tRowNumber;
 		iResult = iVBDataWrite (iHandle, (void *) pcRow, FALSE, isrecnum, TRUE);
 	}
+	if (!iResult && iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
+		iVBTransUpdate (iHandle, psVBFile [iHandle]->tRowNumber, psVBFile [iHandle]->iMinRowLength, psVBFile [iHandle]->iMinRowLength, pcRow);		// BUG - Not varlen compliant!
 
+	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
 	iVBExit (iHandle);
 	return (iResult);
 }
@@ -168,9 +192,21 @@ isrewrec (int iHandle, off_t tRowNumber, char *pcRow)
 	if (iResult)
 		return (-1);
 
-	if (tRowNumber > 0)
+	if (tRowNumber < 1)
 	{
-		iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tRowNumber, FALSE);
+		iResult = -1;
+		iserrno = EBADARG;
+	}
+	else
+	{
+		if (iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
+		{
+			iserrno = iVBDataLock (iHandle, VBWRLOCK, tRowNumber, TRUE);
+			if (!iserrno)
+				iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tRowNumber, TRUE);
+		}
+		else
+			iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tRowNumber, TRUE);
 		if (!iserrno && iDeleted)
 			iserrno = ENOREC;
 		if (iserrno)
@@ -183,7 +219,10 @@ isrewrec (int iHandle, off_t tRowNumber, char *pcRow)
 		isrecnum = tRowNumber;
 		iResult = iVBDataWrite (iHandle, (void *) pcRow, FALSE, isrecnum, TRUE);
 	}
+	if (!iResult && iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
+		iVBTransUpdate (iHandle, tRowNumber, psVBFile [iHandle]->iMinRowLength, psVBFile [iHandle]->iMinRowLength, pcRow);		// BUG - Not varlen compliant!
 
+	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
 	iVBExit (iHandle);
 	return (iResult);
 }

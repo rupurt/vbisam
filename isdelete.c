@@ -7,9 +7,13 @@
  *	This is the module that deals with all the deleting from a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isdelete.c,v 1.2 2003/12/22 04:46:09 trev_vb Exp $
+ *	$Id: isdelete.c,v 1.3 2004/01/03 02:28:48 trev_vb Exp $
  * Modification History:
  *	$Log: isdelete.c,v $
+ *	Revision 1.3  2004/01/03 02:28:48  trev_vb
+ *	TvB 02Jan2004 WAY too many changes to enumerate!
+ *	TvB 02Jan2003 Transaction processing done (excluding iscluster)
+ *	
  *	Revision 1.2  2003/12/22 04:46:09  trev_vb
  *	TvB 21Dec2003 Modified header to correct case ('Id')
  *	
@@ -65,7 +69,7 @@ isdelete (int iHandle, char *pcRow)
 		case	1:	// Exact match
 			iResult = 0;
 			tRowNumber = psVBFile [iHandle]->psKeyCurr [0]->tRowNode;
-			iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tRowNumber, FALSE);
+			iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tRowNumber, TRUE);
 			if (!iserrno && iDeleted)
 				iserrno = ENOREC;
 			if (iserrno)
@@ -74,16 +78,21 @@ isdelete (int iHandle, char *pcRow)
 				iResult = iVBRowDelete (iHandle, tRowNumber);
 			if (!iResult)
 			{
+				if (iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
+					iVBTransDelete (iHandle, tRowNumber, psVBFile [iHandle]->iMinRowLength);	// BUG - not varlen compliant
 				memset ((void *) *(psVBFile [iHandle]->ppcRowBuffer), 0, psVBFile [iHandle]->iMinRowLength + QUADSIZE);
-				iserrno = iVBDataWrite (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), TRUE, tRowNumber, FALSE);
+				iserrno = iVBDataWrite (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), TRUE, tRowNumber, TRUE);
 				if (iserrno)
 					iResult = -1;
 			}
 			if (!iResult)
 			{
-				iserrno = iVBDataFree (iHandle, tRowNumber);
-				if (iserrno)
-					iResult = -1;
+				if (iVBLogfileHandle == -1 || psVBFile [iHandle]->iOpenMode & ISNOLOG)
+				{
+					iserrno = iVBDataFree (iHandle, tRowNumber);
+					if (iserrno)
+						iResult = -1;
+				}
 			}
 			if (!iResult)
 			{
@@ -107,6 +116,7 @@ isdelete (int iHandle, char *pcRow)
 		}
 	}
 
+	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
 	iVBExit (iHandle);
 	return (iResult);
 }
@@ -137,7 +147,7 @@ isdelcurr (int iHandle)
 
 	if (psVBFile [iHandle]->tRowNumber > 0)
 	{
-		iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, psVBFile [iHandle]->tRowNumber, FALSE);
+		iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, psVBFile [iHandle]->tRowNumber, TRUE);
 		if (!iserrno && iDeleted)
 			iserrno = ENOREC;
 		if (iserrno)
@@ -146,24 +156,30 @@ isdelcurr (int iHandle)
 			iResult = iVBRowDelete (iHandle, psVBFile [iHandle]->tRowNumber);
 		if (!iResult)
 		{
+			if (iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
+				iVBTransDelete (iHandle, psVBFile [iHandle]->tRowNumber, psVBFile [iHandle]->iMinRowLength);	// BUG - not varlen compliant
 			memset ((void *) *(psVBFile [iHandle]->ppcRowBuffer), 0, psVBFile [iHandle]->iMinRowLength + QUADSIZE);
-			iserrno = iVBDataWrite (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), TRUE, psVBFile [iHandle]->tRowNumber, FALSE);
+			iserrno = iVBDataWrite (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), TRUE, psVBFile [iHandle]->tRowNumber, TRUE);
 			if (iserrno)
 				iResult = -1;
 		}
-	}
-	if (!iResult)
-	{
-		iserrno = iVBDataFree (iHandle, psVBFile [iHandle]->tRowNumber);
-		if (iserrno)
-			iResult = -1;
-	}
-	if (!iResult)
-	{
-		isrecnum = psVBFile [iHandle]->tRowNumber;
-		psVBFile [iHandle]->tRowNumber = 0;
+		if (!iResult)
+		{
+			if (iVBLogfileHandle == -1 || psVBFile [iHandle]->iOpenMode & ISNOLOG)
+			{
+				iserrno = iVBDataFree (iHandle, psVBFile [iHandle]->tRowNumber);
+				if (iserrno)
+					iResult = -1;
+			}
+		}
+		if (!iResult)
+		{
+			isrecnum = psVBFile [iHandle]->tRowNumber;
+			psVBFile [iHandle]->tRowNumber = 0;
+		}
 	}
 
+	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
 	iVBExit (iHandle);
 	return (iResult);
 }
@@ -196,7 +212,7 @@ isdelrec (int iHandle, off_t tRowNumber)
 
 	if (tRowNumber > 0)
 	{
-		iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, psVBFile [iHandle]->tRowNumber, FALSE);
+		iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tRowNumber, TRUE);
 		if (!iserrno && iDeleted)
 			iserrno = ENOREC;
 		if (iserrno)
@@ -205,25 +221,31 @@ isdelrec (int iHandle, off_t tRowNumber)
 			iResult = iVBRowDelete (iHandle, tRowNumber);
 		if (!iResult)
 		{
+			if (iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
+				iVBTransDelete (iHandle, tRowNumber, psVBFile [iHandle]->iMinRowLength);	// BUG - not varlen compliant
 			memset ((void *) *(psVBFile [iHandle]->ppcRowBuffer), 0, psVBFile [iHandle]->iMinRowLength + QUADSIZE);
-			iserrno = iVBDataWrite (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), TRUE, tRowNumber, FALSE);
+			iserrno = iVBDataWrite (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), TRUE, tRowNumber, TRUE);
 			if (iserrno)
 				iResult = -1;
 		}
-	}
-	if (!iResult)
-	{
-		iserrno = iVBDataFree (iHandle, tRowNumber);
-		if (iserrno)
-			iResult = -1;
-	}
-	if (!iResult)
-	{
-		isrecnum = tRowNumber;
-		if (tRowNumber == psVBFile [iHandle]->tRowNumber)
-			psVBFile [iHandle]->tRowNumber = 0;
+		if (!iResult)
+		{
+			if (iVBLogfileHandle == -1 || psVBFile [iHandle]->iOpenMode & ISNOLOG)
+			{
+				iserrno = iVBDataFree (iHandle, tRowNumber);
+				if (iserrno)
+					iResult = -1;
+			}
+		}
+		if (!iResult)
+		{
+			isrecnum = tRowNumber;
+			if (tRowNumber == psVBFile [iHandle]->tRowNumber)
+				psVBFile [iHandle]->tRowNumber = 0;
+		}
 	}
 
+	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
 	iVBExit (iHandle);
 	return (iResult);
 }

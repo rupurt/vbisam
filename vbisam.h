@@ -7,9 +7,13 @@
  *	This is the header that defines all the various structures et al for
  *	the VBISAM library.
  * Version:
- *	$Id: vbisam.h,v 1.3 2003/12/23 03:08:56 trev_vb Exp $
+ *	$Id: vbisam.h,v 1.4 2004/01/03 02:28:48 trev_vb Exp $
  * Modification History:
  *	$Log: vbisam.h,v $
+ *	Revision 1.4  2004/01/03 02:28:48  trev_vb
+ *	TvB 02Jan2004 WAY too many changes to enumerate!
+ *	TvB 02Jan2003 Transaction processing done (excluding iscluster)
+ *	
  *	Revision 1.3  2003/12/23 03:08:56  trev_vb
  *	TvB 22Dec2003 Minor compilation glitch 'fixes'
  *	
@@ -38,19 +42,19 @@
 #define	CHARTYPE	0
 #define	INTTYPE		1
 #define	LONGTYPE	2
-#define	QUADTYPE	3
+#define	DOUBLETYPE	3
 #define	FLOATTYPE	4
-#define	DOUBLETYPE	5
+#define	QUADTYPE	5
 #define	CHARSIZE	1
 #define	INTSIZE		2
 #define	LONGSIZE	4
+#define	DOUBLESIZE	(sizeof (double))
+#define	FLOATSIZE	(sizeof (float))
 #if	_FILE_OFFSET_BITS == 64
 #define	QUADSIZE	8
 #else	// _FILE_OFFSET_BITS == 64
 #define	QUADSIZE	4
 #endif	// _FILE_OFFSET_BITS == 64
-#define	FLOATSIZE	(sizeof (float))
-#define	DOUBLESIZE	(sizeof (double))
 #define	ISDESC		0x80
 
 #define	BYTEMASK	0xFF	// Mask for one byte

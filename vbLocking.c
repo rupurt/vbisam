@@ -7,9 +7,13 @@
  *	This module handles the locking on both the index and data files for the
  *	VBISAM library.
  * Version:
- *	$Id: vbLocking.c,v 1.2 2003/12/22 04:42:14 trev_vb Exp $
+ *	$Id: vbLocking.c,v 1.3 2004/01/03 02:28:48 trev_vb Exp $
  * Modification History:
  *	$Log: vbLocking.c,v $
+ *	Revision 1.3  2004/01/03 02:28:48  trev_vb
+ *	TvB 02Jan2004 WAY too many changes to enumerate!
+ *	TvB 02Jan2003 Transaction processing done (excluding iscluster)
+ *	
  *	Revision 1.2  2003/12/22 04:42:14  trev_vb
  *	TvB 21Dec2003 Changed name of environment var (Prep for future)
  *	TvB 21Dec2003 Also, changed 'ID' cvs header to 'Id' (Duh on me!)
@@ -94,9 +98,10 @@ iVBEnter (int iHandle, int iModifying)
 
 	if (!psVBFile [iHandle])
 	{
-		iserrno = EBADARG;
+		iserrno = ENOTOPEN;
 		return (-1);
 	}
+	psVBFile [iHandle]->sFlags.iIndexChanged = 0;
 	if ((psVBFile [iHandle]->iOpenMode & ISEXCLLOCK))
 		return (0);
 	if (psVBFile [iHandle]->sFlags.iIsDictLocked)
@@ -165,20 +170,23 @@ iVBExit (int iHandle)
 		tTransNumber;
 
 	iSaveError = iserrno;
-	if (!psVBFile [iHandle] || !psVBFile [iHandle]->sFlags.iIsDictLocked)
+	if (!psVBFile [iHandle] || (!psVBFile [iHandle]->sFlags.iIsDictLocked && !(psVBFile [iHandle]->iOpenMode & ISEXCLLOCK)))
 	{
 		iserrno = EBADARG;
 		return (-1);
 	}
-	iserrno = 0;
 	tTransNumber = ldquad (psVBFile [iHandle]->sDictNode.cTransNumber);
 	psVBFile [iHandle]->tTransLast = tTransNumber;
-	if (psVBFile [iHandle]->iOpenMode & ISEXCLLOCK)
-		return (0);
 	if (psVBFile [iHandle]->sFlags.iIsDictLocked == 2)
 	{
 		psVBFile [iHandle]->tTransLast = tTransNumber + 1;
 		stquad (tTransNumber + 1, psVBFile [iHandle]->sDictNode.cTransNumber);
+		psVBFile [iHandle]->tTransLast = tTransNumber + 1;
+	}
+	if (psVBFile [iHandle]->iOpenMode & ISEXCLLOCK)
+		return (0);
+	if (psVBFile [iHandle]->sFlags.iIsDictLocked >= 2)
+	{
 		memset (cNode0, 0, MAX_NODE_LENGTH);
 		memcpy ((void *) cNode0, (void *) &psVBFile [iHandle]->sDictNode, sizeof (struct DICTNODE));
 		//iResult = iVBNodeWrite (iHandle, (void *) cNode0, 1);
@@ -192,8 +200,11 @@ iVBExit (int iHandle)
 	cNode0 [0] = 0x3f;
 	tLength = ldquad (cNode0);
 	iResult = iVBLock (psVBFile [iHandle]->iIndexHandle, 0, tLength, VBUNLOCK);
-	if (iserrno)
+	if (iResult)
+	{
+		iserrno = errno;
 		return (-1);
+	}
 	psVBFile [iHandle]->sFlags.iIsDictLocked = 0;
 	// Free up any key/tree no longer wanted
 	if (iVBBufferLevel == -1)
@@ -266,12 +277,12 @@ int
 iVBForceExit (int iHandle)
 {
 	int	iResult;
-	off_t	tTransNumber;
+	//off_t	tTransNumber;
 
 	if (psVBFile [iHandle]->sFlags.iIsDictLocked == 2)
 	{
-		tTransNumber = ldquad (psVBFile [iHandle]->sDictNode.cTransNumber) + 1;
-		stquad (tTransNumber, psVBFile [iHandle]->sDictNode.cTransNumber);
+		//tTransNumber = ldquad (psVBFile [iHandle]->sDictNode.cTransNumber) + 1;
+		//stquad (tTransNumber, psVBFile [iHandle]->sDictNode.cTransNumber);
 		memset (cNode0, 0, MAX_NODE_LENGTH);
 		memcpy ((void *) cNode0, (void *) &psVBFile [iHandle]->sDictNode, sizeof (struct DICTNODE));
 		//iResult = iVBNodeWrite (iHandle, (void *) cNode0, 1);
@@ -336,6 +347,8 @@ iVBFileOpenLock (int iHandle, int iMode)
 
 	case	2:
 		iLockType = VBWRLOCK;
+		iResult = iVBBlockRead (iHandle, TRUE, (off_t) 1, cNode0);
+		memcpy ((void *) &psVBFile [iHandle]->sDictNode, (void *) cNode0, sizeof (struct DICTNODE));
 		break;
 
 	default:
@@ -402,17 +415,21 @@ iVBDataLock (int iHandle, int iMode, off_t tRowNumber, int iIsTransaction)
 	 */
 	if (tRowNumber == 0)
 	{
-		psLock = psVBFile [iHandle]->psLocks;
+		psLock = psVBFile [iHandle]->psLockHead;
 		while (psLock)
 		{
-			psVBFile [iHandle]->psLocks = psLock->psNext;
+			psVBFile [iHandle]->psLockHead = psLock->psNext;
 			vVBLockFree (psLock);
-			psLock = psVBFile [iHandle]->psLocks;
+			psLock = psVBFile [iHandle]->psLockHead;
 		}
+		psVBFile [iHandle]->psLockTail = psVBFile [iHandle]->psLockHead;
 		memset (cNode0, 0xff, QUADSIZE);
 		cNode0 [0] = 0x3f;
 		tLength = ldquad (cNode0);
-		psVBFile [iHandle]->sFlags.iIsDataLocked = TRUE;
+		if (iMode == VBUNLOCK)
+			psVBFile [iHandle]->sFlags.iIsDataLocked = FALSE;
+		else
+			psVBFile [iHandle]->sFlags.iIsDataLocked = TRUE;
 	}
 	/*
 	 * A one byte row lock can be merged with previous / next row locks
@@ -457,30 +474,58 @@ iVBLockInsert (int iHandle, off_t tRowNumber, int iIsTransaction)
 		*psNewLock = VBLOCK_NULL,
 		*psLock = VBLOCK_NULL;
 
-	psLock = psVBFile [iHandle]->psLocks;
+	psLock = psVBFile [iHandle]->psLockHead;
 	// Insertion at head of list
-	if (psLock == VBLOCK_NULL || psLock->tRowNumber > tRowNumber)
+	if (psLock == VBLOCK_NULL || iIsTransaction < psLock->iIsTransaction || tRowNumber < psLock->tRowNumber)
 	{
 		psNewLock = psVBLockAllocate (iHandle);
 		if (psNewLock == VBLOCK_NULL)
 			return (errno);
-		psNewLock->psNext = VBLOCK_NULL;
 		psNewLock->iIsTransaction = iIsTransaction;
 		psNewLock->tRowNumber = tRowNumber;
 		psNewLock->psNext = psLock;
-		psVBFile [iHandle]->psLocks = psNewLock;
+		psVBFile [iHandle]->psLockHead = psNewLock;
+		if (psVBFile [iHandle]->psLockTail == VBLOCK_NULL)
+			psVBFile [iHandle]->psLockTail = psNewLock;
 		return (0);
 	}
-	// Position psLock to insertion point
-	while (psLock->psNext && psLock->psNext->tRowNumber < tRowNumber)
-		psLock = psLock->psNext;
-	// Sanity check for duplicate (Might be promoting a lock to a trans!)
-	if (psLock->psNext && psLock->psNext->tRowNumber == tRowNumber)
+	// Insertion at tail of list
+	if (iIsTransaction >= psVBFile [iHandle]->psLockTail->iIsTransaction && tRowNumber > psVBFile [iHandle]->psLockTail->tRowNumber)
 	{
-		psLock->psNext->iIsTransaction = iIsTransaction;
+		psNewLock = psVBLockAllocate (iHandle);
+		if (psNewLock == VBLOCK_NULL)
+			return (errno);
+		psNewLock->iIsTransaction = iIsTransaction;
+		psNewLock->tRowNumber = tRowNumber;
+		psVBFile [iHandle]->psLockTail->psNext = psNewLock;
+		psVBFile [iHandle]->psLockTail = psNewLock;
 		return (0);
 	}
-	psNewLock = psVBLockAllocate (iHandle);
+	// Position psLock to insertion point (Keep in mind, we insert AFTER)
+	while (psLock->psNext && iIsTransaction >= psLock->psNext->iIsTransaction && tRowNumber > psLock->psNext->tRowNumber)
+	{
+		// Are we promoting a non-transactional lock to transactional?
+		if (tRowNumber == psLock->psNext->tRowNumber)
+		{
+			// Is it already 'correct'?
+			if (iIsTransaction == psLock->psNext->iIsTransaction)
+				return (0);	// Already OK!
+			else
+			{
+				// Are we promoting the tail?
+				if (psLock->psNext == psVBFile [iHandle]->psLockTail)
+				{
+					psLock->psNext->iIsTransaction = iIsTransaction;
+					return (0);
+				}
+				psNewLock = psLock->psNext;
+				psLock->psNext = psNewLock->psNext;
+			}
+		}
+		psLock = psLock->psNext;
+	}
+	if (!psNewLock)
+		psNewLock = psVBLockAllocate (iHandle);
 	if (psNewLock == VBLOCK_NULL)
 		return (errno);
 	psNewLock->psNext = VBLOCK_NULL;
@@ -516,7 +561,7 @@ iVBLockDelete (int iHandle, off_t tRowNumber, int iIsTransaction)
 {
 	struct	VBLOCK
 		*psLockToDelete,
-		*psLock = psVBFile [iHandle]->psLocks;
+		*psLock = psVBFile [iHandle]->psLockHead;
 
 	// Sanity check #1
 	if (!psLock || psLock->tRowNumber > tRowNumber)
@@ -524,9 +569,11 @@ iVBLockDelete (int iHandle, off_t tRowNumber, int iIsTransaction)
 	// Check if deleting first entry in list
 	if (psLock->tRowNumber == tRowNumber)
 	{
-		if (psVBFile [iHandle]->psLocks->iIsTransaction && !iIsTransaction)
+		if (psVBFile [iHandle]->psLockHead->iIsTransaction && !iIsTransaction)
 			return (ENOTRANS);
-		psVBFile [iHandle]->psLocks = psLock->psNext;
+		psVBFile [iHandle]->psLockHead = psLock->psNext;
+		if (!psVBFile [iHandle]->psLockHead)
+			psVBFile [iHandle]->psLockTail = VBLOCK_NULL;
 		vVBLockFree (psLock);
 		return (0);
 	}
@@ -536,10 +583,12 @@ iVBLockDelete (int iHandle, off_t tRowNumber, int iIsTransaction)
 	// Sanity check #2
 	if (!psLock->psNext || psLock->psNext->tRowNumber != tRowNumber)
 		return (EBADARG);
-	if (psVBFile [iHandle]->psLocks->iIsTransaction && !iIsTransaction)
+	if (psLock->psNext->iIsTransaction && !iIsTransaction)
 		return (ENOTRANS);
 	psLockToDelete = psLock->psNext;
 	psLock->psNext = psLockToDelete->psNext;
+	if (psLockToDelete == psVBFile [iHandle]->psLockTail)
+			psVBFile [iHandle]->psLockTail = psLock;
 	vVBLockFree (psLockToDelete);
 
 	return (0);

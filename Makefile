@@ -5,9 +5,13 @@
 # Description:
 #	This is the main makefile that BUILDS all this stuff (I hope)
 # Version:
-#	$Id: Makefile,v 1.3 2003/12/23 03:24:43 trev_vb Exp $
+#	$Id: Makefile,v 1.4 2004/01/03 02:28:48 trev_vb Exp $
 # Modification History:
 #	$Log: Makefile,v $
+#	Revision 1.4  2004/01/03 02:28:48  trev_vb
+#	TvB 02Jan2004 WAY too many changes to enumerate!
+#	TvB 02Jan2003 Transaction processing done (excluding iscluster)
+#	
 #	Revision 1.3  2003/12/23 03:24:43  trev_vb
 #	TvB 22Dec2002 Added in -fPIC to CFLAGS for portability + changed default libdir
 #	
@@ -18,10 +22,8 @@
 SHELL	= /bin/sh
 DEPS	= isinternal.h vbisam.h Makefile
 LIB	= vbisam
-ALB	= /usr/lib$(LIB).a
-SLB	= /usr/lib$(LIB).so
-ALB	= ./lib$(LIB).a
-SLB	= ./lib$(LIB).so
+ALB	= /usr/lib/lib$(LIB).a
+SLB	= /usr/lib/lib$(LIB).so
 # ****************************************************************************
 # CFLAGS info
 # ===========
@@ -31,18 +33,21 @@ SLB	= ./lib$(LIB).so
 #		Otherwise uses 1kB (32bit versions) or 4kB (64bit versions)
 # -O3 -s:	Optimizes code and strips symbols (Better / Faster code?)
 # -g:		Produces code with which gdb can be used
+# -pg:		Generate gprof-able code
 # -D_FILE_OFFSET_BITS=64:
 #		Produces 64-bit file-I/O code (Files incompatable with 32-bit)
 # ****************************************************************************
 CFLAGS	= -fPIC -Wall -DDEBUG -O3 -s -D_FILE_OFFSET_BITS=64
-CFLAGS	= -fPIC -Wall -DDEV -DDEBUG -D_FILE_OFFSET_BITS=64 -g
-CFLAGS	= -fPIC -Wall -DDEBUG -g
+CFLAGS	= -fPIC -Wall -DDEV -DDEBUG -D_FILE_OFFSET_BITS=64 -pg -g
+CFLAGS	= -fPIC -Wall -DDEBUG -pg -g
 CFLAGS	= -fPIC -Wall -DDEBUG -O3 -s
-CFLAGS	= -fPIC -Wall -g
+CFLAGS	= -fPIC -Wall -pg -g
 CFLAGS	= -fPIC -Wall -O3 -s
+
 SRCS	= \
 	isDecimal.c \
 	isHelper.c \
+	isaudit.c \
 	isbuild.c \
 	isdelete.c \
 	isopen.c \
@@ -61,9 +66,7 @@ OBJS	= ${SRCS:.c=.o}
 all:	${ALB} ${SLB} IsamTest
 
 .o:
-	cc $(CFLAGS) -o $@ $< $(ALB)
-
-#	cc $(CFLAGS) -o $@ $< -l$(LIB)
+	cc $(CFLAGS) -o $@ $< -l$(LIB)
 
 ${ALB}:	${OBJS} Makefile
 	${AR} srv $@ $?

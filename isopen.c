@@ -6,9 +6,13 @@
  * Description:
  *	This module deals with the opening and closing of VBISAM files
  * Version:
- *	$Id: isopen.c,v 1.2 2003/12/22 04:47:11 trev_vb Exp $
+ *	$Id: isopen.c,v 1.3 2004/01/03 02:28:48 trev_vb Exp $
  * Modification History:
  *	$Log: isopen.c,v $
+ *	Revision 1.3  2004/01/03 02:28:48  trev_vb
+ *	TvB 02Jan2004 WAY too many changes to enumerate!
+ *	TvB 02Jan2003 Transaction processing done (excluding iscluster)
+ *	
  *	Revision 1.2  2003/12/22 04:47:11  trev_vb
  *	TvB 21Dec2003 Modified header to correct case ('Id')
  *	
@@ -77,20 +81,26 @@ iscleanup (void)
 int
 isclose (int iHandle)
 {
+	char	cFilename [MAX_PATH_LENGTH + 1];
 	int	iLoop,
 		iResult;
 	struct	VBLOCK
 		*psRowLock;
 
 	if (iHandle < 0 || iHandle > iVBMaxUsedHandle)
-		goto CLOSE_ERR;
+	{
+		iserrno = ENOTOPEN;
+		return (-1);
+	}
 	if (psVBFile [iHandle] == (struct DICTINFO *) 0)
 		goto CLOSE_ERR;
 	if (psVBFile [iHandle]->iOpenMode & ISEXCLLOCK)
 		iVBForceExit (iHandle);	// Bug - Check retval
 	vVBBlockInvalidate (iHandle);
+	psVBFile [iHandle]->sFlags.iIndexChanged = 0;
 	iResult = iVBClose (psVBFile [iHandle]->iDataHandle);
 	iResult = iVBClose (psVBFile [iHandle]->iIndexHandle);
+	memcpy (cFilename, psVBFile [iHandle]->cFilename, MAX_PATH_LENGTH);
 	for (iLoop = 0; iLoop < MAXSUBS; iLoop++)
 	{
 		vVBTreeAllFree (iHandle, iLoop, psVBFile [iHandle]->psTree [iLoop]);
@@ -100,12 +110,13 @@ isclose (int iHandle)
 			vVBFree (psVBFile [iHandle]->psKeydesc [iLoop], sizeof (struct keydesc));
 		}
 	}
-	while (psVBFile [iHandle]->psLocks)
+	while (psVBFile [iHandle]->psLockHead)
 	{
-		psRowLock = psVBFile [iHandle]->psLocks->psNext;
-		vVBLockFree (psVBFile [iHandle]->psLocks);
-		psVBFile [iHandle]->psLocks = psRowLock;
+		psRowLock = psVBFile [iHandle]->psLockHead->psNext;
+		vVBLockFree (psVBFile [iHandle]->psLockHead);
+		psVBFile [iHandle]->psLockHead = psRowLock;
 	}
+	iVBTransClose (iHandle, cFilename);
 	vVBFree (psVBFile [iHandle], sizeof (struct DICTINFO));
 	psVBFile [iHandle] = (struct DICTINFO *) 0;
 
@@ -138,6 +149,7 @@ CLOSE_ERR:
 int
 isindexinfo (int iHandle, struct keydesc *psKeydesc, int iKeyNumber)
 {
+	char	*pcTemp;
 	int	iResult;
 	struct	dictinfo
 		sDict;
@@ -163,9 +175,15 @@ isindexinfo (int iHandle, struct keydesc *psKeydesc, int iKeyNumber)
 		return (-1);
 
 	sDict.iNKeys = psVBFile [iHandle]->iNKeys;
+	if (psVBFile [iHandle]->iOpenMode & ISVARLEN)
+	{
+		pcTemp = (char *) &sDict.iNKeys;
+		*pcTemp |= 0x80;
+	}
 	sDict.iMaxRowLength = psVBFile [iHandle]->iMaxRowLength;
 	sDict.iIndexLength = psVBFile [iHandle]->iNodeSize;
 	sDict.tNRows = tCountRows (iHandle);
+	isreclen = psVBFile [iHandle]->iMinRowLength;
 	memcpy (psKeydesc, &sDict, sizeof (struct dictinfo));
 
 	iVBExit (iHandle);
@@ -208,7 +226,14 @@ isopen (char *pcFilename, int iMode)
 	if (!iInitialized)
 	{
 		iInitialized = TRUE;
+		tVBPID = getpid ();
+		tVBUID = getuid ();
 		atexit (vVBUnMalloc);
+	}
+	if (iMode & ISTRANS && iVBLogfileHandle == -1)
+	{
+		iserrno = EBADARG;
+		return (-1);
 	}
 	iFlags = iMode & 0x03;
 	if (iFlags == 3)
@@ -242,6 +267,7 @@ isopen (char *pcFilename, int iMode)
 		goto OPEN_ERR;
 	psFile = psVBFile [iHandle];
 	memset (psFile, 0, sizeof (struct DICTINFO));
+	memcpy (psFile->cFilename, pcFilename, strlen (pcFilename) + 1);
 	psFile->iDataHandle = -1;
 	psFile->iIndexHandle = -1;
 	sprintf (cNode0, "%s.dat", pcFilename);
@@ -281,7 +307,10 @@ isopen (char *pcFilename, int iMode)
 	psFile->iNodeSize = ldint (psVBFile [iHandle]->sDictNode.cNodeSize) + 1;
 	psFile->iNKeys = ldint (psVBFile [iHandle]->sDictNode.cIndexCount);
 	psFile->iMinRowLength = ldint (psVBFile [iHandle]->sDictNode.cMinRowLength);
-	psFile->iMaxRowLength = ldint (psVBFile [iHandle]->sDictNode.cMaxRowLength);
+	if (iMode & ISVARLEN)
+		psFile->iMaxRowLength = ldint (psVBFile [iHandle]->sDictNode.cMaxRowLength);
+	else
+		psFile->iMaxRowLength = psFile->iMinRowLength;
 
 	if (psFile->iMaxRowLength && psFile->iMaxRowLength != psFile->iMinRowLength)
 	{
@@ -296,14 +325,20 @@ isopen (char *pcFilename, int iMode)
 			goto OPEN_ERR;
 	}
 	psFile->iOpenMode = iMode;
-	if (psFile->iMinRowLength + QUADSIZE > iRowBufferLength)
+	if (psFile->iMinRowLength + 1 + INTSIZE + QUADSIZE > iVBRowBufferLength)
 	{
 		if (pcRowBuffer)
-			vVBFree (pcRowBuffer, iRowBufferLength);
-		iRowBufferLength = psFile->iMinRowLength + QUADSIZE;
-		pcRowBuffer = (char *) pvVBMalloc (iRowBufferLength);
+		{
+			vVBFree (pcRowBuffer, iVBRowBufferLength);
+			vVBFree (pcWriteBuffer, iVBRowBufferLength);
+		}
+		iVBRowBufferLength = psFile->iMinRowLength + 1 + INTSIZE + QUADSIZE;
+		pcRowBuffer = (char *) pvVBMalloc (iVBRowBufferLength);
 		if (!pcRowBuffer)
-			goto OPEN_ERR;
+			goto OPEN_ERR;		// BUG This is MORE serious
+		pcWriteBuffer = (char *) pvVBMalloc (iVBRowBufferLength);
+		if (!pcWriteBuffer)
+			goto OPEN_ERR;		// BUG This is MORE serious
 	}
 	psFile->ppcRowBuffer = &pcRowBuffer;
 	tNodeNumber = ldquad (psVBFile [iHandle]->sDictNode.cNodeKeydesc);

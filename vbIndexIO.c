@@ -7,9 +7,13 @@
  *	This module handles ALL the low level index file I/O operations for the
  *	VBISAM library.
  * Version:
- *	$Id: vbIndexIO.c,v 1.2 2003/12/22 04:40:22 trev_vb Exp $
+ *	$Id: vbIndexIO.c,v 1.3 2004/01/03 02:28:48 trev_vb Exp $
  * Modification History:
  *	$Log: vbIndexIO.c,v $
+ *	Revision 1.3  2004/01/03 02:28:48  trev_vb
+ *	TvB 02Jan2004 WAY too many changes to enumerate!
+ *	TvB 02Jan2003 Transaction processing done (excluding iscluster)
+ *	
  *	Revision 1.2  2003/12/22 04:40:22  trev_vb
  *	TvB 21Dec2003 Fixups to make freelists compatible with a commercial competitor
  *	TvB 21Dec2003 Also, changed the cvs 'ID' header to 'Id' (Duh!)
@@ -156,15 +160,18 @@ iVBUniqueIDSet (int iHandle, off_t tUniqueID)
 	off_t	tValue;
 
 	// Sanity check - Is iHandle a currently open table?
+	iserrno = ENOTOPEN;
 	if (!psVBFile [iHandle])
-		return (ENOTOPEN);
+		return (-1);
+	iserrno = EBADARG;
 	if (!psVBFile [iHandle]->sFlags.iIsDictLocked)
-		return (EBADARG);
+		return (-1);
 
+	iserrno = 0;
 	tValue = ldquad (psVBFile [iHandle]->sDictNode.cUniqueID);
 	if (tUniqueID > tValue)
 	{
-		stquad (tValue, psVBFile [iHandle]->sDictNode.cUniqueID);
+		stquad (tUniqueID, psVBFile [iHandle]->sDictNode.cUniqueID);
 		psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
 	}
 	return (0);
@@ -198,8 +205,8 @@ tVBUniqueIDGetNext (int iHandle)
 		return (-1);
 	iserrno = 0;
 
-	tValue = ldquad (psVBFile [iHandle]->sDictNode.cUniqueID) + 1;
-	stquad (tValue, psVBFile [iHandle]->sDictNode.cUniqueID);
+	tValue = ldquad (psVBFile [iHandle]->sDictNode.cUniqueID);
+	stquad (tValue + 1, psVBFile [iHandle]->sDictNode.cUniqueID);
 	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
 	return (tValue);
 }
@@ -334,9 +341,9 @@ iVBNodeFree (int iHandle, off_t tNodeNumber)
 	iResult = iVBBlockRead (iHandle, TRUE, tHeadNode, cNode0);
 	if (iResult)
 		return (iResult);
-	if (cNode1 [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
+	if (cNode0 [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
 		return (EBADFILE);
-	if (cNode1 [psVBFile [iHandle]->iNodeSize - 3] != -2)
+	if (cNode0 [psVBFile [iHandle]->iNodeSize - 3] != -2)
 		return (EBADFILE);
 	iLengthUsed = ldint (cNode0);
 	if (iLengthUsed >= psVBFile [iHandle]->iNodeSize - (QUADSIZE + 3))
@@ -367,7 +374,7 @@ iVBNodeFree (int iHandle, off_t tNodeNumber)
 	//iResult = iVBNodeWrite (iHandle, (void *) cNode0, tHeadNode);
 	iResult = iVBBlockWrite (iHandle, TRUE, tHeadNode, cNode0);
 
-	return (0);
+	return (iResult);
 }
 
 /*
@@ -421,7 +428,7 @@ iVBDataFree (int iHandle, off_t tRowNumber)
 		if (iLengthUsed < psVBFile [iHandle]->iNodeSize - (QUADSIZE + 3))
 		{
 			// We need to add tRowNumber to the current node
-			stquad ((off_t) tRowNumber, &cNode0 [iLengthUsed]);
+			stquad ((off_t) tRowNumber, cNode0 + iLengthUsed);
 			iLengthUsed += QUADSIZE;
 			stint (iLengthUsed, cNode0);
 			//iResult = iVBNodeWrite (iHandle, (void *) cNode0, tHeadNode);
@@ -489,27 +496,25 @@ tVBNodeAllocate (int iHandle)
 		if (iserrno)
 			return (-1);
 		iserrno = EBADFILE;
-		if (memcmp (cNode0, "VB04", 4))
+		if (cNode0 [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
 			return (-1);
-		iLengthUsed = ldint (&cNode0 [4]);
-		if (iLengthUsed > 4 + (INTSIZE * 2) + QUADSIZE)
+		if (cNode0 [psVBFile [iHandle]->iNodeSize - 3] != -2)
+			return (-1);
+		iLengthUsed = ldint (cNode0);
+		if (iLengthUsed > (INTSIZE + QUADSIZE))
 		{
+			tValue = ldquad (cNode0 + INTSIZE + QUADSIZE);
+			memcpy (cNode0 + INTSIZE + QUADSIZE, cNode0 + INTSIZE + QUADSIZE + QUADSIZE, iLengthUsed - (INTSIZE + QUADSIZE + QUADSIZE));
 			iLengthUsed -= QUADSIZE;
-			stint (iLengthUsed, &cNode0 [4]);
-			tValue = ldquad (&cNode0 [iLengthUsed]);
-			stquad ((off_t) 0, &cNode0 [iLengthUsed]);
-			//iserrno = iVBNodeRead (iHandle, (void *) cNode1, tValue);
-			iserrno = iVBBlockRead (iHandle, TRUE, tValue, cNode1);
-			if (iserrno || memcmp (cNode1, "VB00", 4))
-				return (-1);
-			//iserrno = iVBNodeWrite (iHandle, (void *) cNode0, tHeadNode);
+			memset (cNode0 + iLengthUsed, 0, QUADSIZE);
+			stint (iLengthUsed, cNode0);
 			iserrno = iVBBlockWrite (iHandle, TRUE, tHeadNode, cNode0);
 			if (iserrno)
 				return (-1);
 			return (tValue);
 		}
 		// If it's last entry in the node, use the node itself!
-		tValue = ldquad (&cNode0 [4 + (INTSIZE * 2)]);
+		tValue = ldquad (cNode0 + INTSIZE);
 		stquad (tValue, psVBFile [iHandle]->sDictNode.cNodeFree);
 		psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
 		return (tHeadNode);
@@ -564,7 +569,9 @@ tVBDataAllocate (int iHandle)
 		if (iserrno)
 			return (-1);
 		iserrno = EBADFILE;
-		if (memcmp (cNode0, "VB04", 4))
+		if (cNode0 [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
+			return (-1);
+		if (cNode0 [psVBFile [iHandle]->iNodeSize - 3] != -1)
 			return (-1);
 		iLengthUsed = ldint (&cNode0 [4]);
 		if (iLengthUsed > 4 + (INTSIZE * 2) + QUADSIZE)

@@ -7,9 +7,13 @@
  *	This is the module that deals with all the reading from a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isread.c,v 1.2 2003/12/22 04:47:23 trev_vb Exp $
+ *	$Id: isread.c,v 1.3 2004/01/03 02:28:48 trev_vb Exp $
  * Modification History:
  *	$Log: isread.c,v $
+ *	Revision 1.3  2004/01/03 02:28:48  trev_vb
+ *	TvB 02Jan2004 WAY too many changes to enumerate!
+ *	TvB 02Jan2003 Transaction processing done (excluding iscluster)
+ *	
  *	Revision 1.2  2003/12/22 04:47:23  trev_vb
  *	TvB 21Dec2003 Modified header to correct case ('Id')
  *	
@@ -65,7 +69,6 @@ isread (int iHandle, char *pcRow, int iMode)
 		iKeyNumber,
 		iLockResult = 0,
 		iReadMode,
-		iReadResult = 0,
 		iResult = -1;
 	struct	VBKEY
 		*psKey;
@@ -95,30 +98,42 @@ isread (int iHandle, char *pcRow, int iMode)
 			memcpy (pcRow, *(psVBFile [iHandle]->ppcRowBuffer), psVBFile [iHandle]->iMinRowLength);
 			psVBFile [iHandle]->sFlags.iIsDisjoint = 0;
 		}
-		// BUG - VARLEN additions?
+		// BUG - varlen additions?
 		goto ReadExit;
 	}
 	iserrno = 0;
 	isrecnum = 0;
 	switch (iReadMode)
 	{
-	case	ISFIRST:	// cKeyValue is just a placeholder for 1st/last
+	// cKeyValue is just a placeholder for ISFIRST
+	case	ISFIRST:
 		iResult = iVBKeySearch (iHandle, iReadMode, iKeyNumber, 0, cKeyValue, 0);
 		if (iResult < 0)
 			break;
-		iResult = 0;
+		if (iResult == 2)
+			iserrno = EENDFILE;
+		else
+			iResult = 0;
 		break;
 
-	case	ISLAST:		// cKeyValue is just a placeholder for 1st/last
+	/*
+	 * cKeyValue is just a placeholder for ISLAST
+	 * Note that the KeySearch (ISLAST) will position the pointer onto the
+	 * LAST key of the LAST tree which, by definition, is a DUMMY key
+	 */
+	case	ISLAST:	
 		iResult = iVBKeySearch (iHandle, iReadMode, iKeyNumber, 0, cKeyValue, 0);
-		if (iResult < 0 || iResult > 2)
-		{
-			iResult = -1;
+		if (iResult < 0)
 			break;
+		if (iResult == 2)
+			iserrno = EENDFILE;
+		else
+		{
+			iResult = 0;
+			iserrno = iVBKeyLoad (iHandle, iKeyNumber, ISPREV, TRUE, &psKey);
+			if (iserrno)
+				iResult = -1;
 		}
-		iserrno = iVBKeyLoad (iHandle, iKeyNumber, ISPREV, TRUE, &psKey);
-		if (iserrno)
-			iResult = -1;
 		break;
 
 	case	ISEQUAL:
@@ -126,14 +141,10 @@ isread (int iHandle, char *pcRow, int iMode)
 		iResult = iVBKeySearch (iHandle, iReadMode, iKeyNumber, 0, cKeyValue, 0);
 		if (iResult == -1)		// Error
 			break;
-		// Map EQUAL onto OK and LESS THAN onto OK if the basekey is ==
-		if (iResult == 1)
+		if (iResult == 1)	// Found it!
 			iResult = 0;
 		else
-			if (iResult == 0 && memcmp (cKeyValue, psVBFile [iHandle]->psKeyCurr [psVBFile [iHandle]->iActiveKey]->cKey, psVBFile [iHandle]->psKeydesc [psVBFile [iHandle]->iActiveKey]->iKeyLength))
-				iResult = 1;
-		if (iResult == -1)
-			iserrno = EBADFILE;
+			iserrno = ENOREC;
 		break;
 
 	case	ISGREAT:
@@ -142,24 +153,41 @@ isread (int iHandle, char *pcRow, int iMode)
 		iResult = iVBKeySearch (iHandle, iReadMode, iKeyNumber, 0, cKeyValue, 0);
 		if (iResult < 0)		// Error is always error
 			break;
-		if (iResult < 2)
+		if (iResult == 2)
 		{
-			iResult = 0;
+			iserrno = EENDFILE;
 			break;
 		}
-		iserrno = EENDFILE;
-		iResult = 1;
+		if (iResult == 1)
+			iResult = 0;
+		else
+		{
+			iResult = 0;
+			if (psVBFile [iHandle]->psKeyCurr [iKeyNumber]->sFlags.iIsDummy)
+			{
+				iserrno = EENDFILE;
+				iResult = -1;
+			}
+		}
 		break;
 
 	case	ISPREV:
 		if (psVBFile [iHandle]->tRowStart)
 			iResult = iVBKeyLocateRow (iHandle, iKeyNumber, psVBFile [iHandle]->tRowStart);
 		else
-			iResult = iVBKeyLocateRow (iHandle, iKeyNumber, psVBFile [iHandle]->tRowNumber);
+			if (psVBFile [iHandle]->tRowNumber)
+				iResult = iVBKeyLocateRow (iHandle, iKeyNumber, psVBFile [iHandle]->tRowNumber);
+			else
+			{
+				iserrno = ENOCURR;
+				iResult = -1;
+				break;
+			}
 		if (iResult)
-			iserrno = EENDFILE;
+			iserrno = ENOCURR;
 		else
 		{
+			iResult = 0;
 			iserrno = iVBKeyLoad (iHandle, iKeyNumber, ISPREV, TRUE, &psKey);
 			if (iserrno)
 				iResult = -1;
@@ -172,11 +200,19 @@ isread (int iHandle, char *pcRow, int iMode)
 			if (psVBFile [iHandle]->tRowStart)
 				iResult = iVBKeyLocateRow (iHandle, iKeyNumber, psVBFile [iHandle]->tRowStart);
 			else
-				iResult = iVBKeyLocateRow (iHandle, iKeyNumber, psVBFile [iHandle]->tRowNumber);
+				if (psVBFile [iHandle]->tRowNumber)
+					iResult = iVBKeyLocateRow (iHandle, iKeyNumber, psVBFile [iHandle]->tRowNumber);
+				else
+				{
+					iserrno = ENOCURR;
+					iResult = -1;
+					break;
+				}
 			if (iResult)
 				iserrno = EENDFILE;
 			else
 			{
+				iResult = 0;
 				iserrno = iVBKeyLoad (iHandle, iKeyNumber, ISNEXT, TRUE, &psKey);
 				if (iserrno)
 					iResult = -1;
@@ -184,49 +220,42 @@ isread (int iHandle, char *pcRow, int iMode)
 			break;		// Exit the switch case
 		}
 	case	ISCURR:
-// BUG??
 		if (psVBFile [iHandle]->tRowStart)
 			iResult = iVBKeyLocateRow (iHandle, iKeyNumber, psVBFile [iHandle]->tRowStart);
 		else
-			iResult = iVBKeyLocateRow (iHandle, iKeyNumber, psVBFile [iHandle]->tRowNumber);
+			if (psVBFile [iHandle]->tRowNumber)
+				iResult = iVBKeyLocateRow (iHandle, iKeyNumber, psVBFile [iHandle]->tRowNumber);
+			else
+			{
+				iserrno = ENOCURR;
+				iResult = -1;
+				break;
+			}
 		if (iResult)
-			iserrno = EENDFILE;
+			iserrno = ENOCURR;
 		break;
 
 	default:
 		iserrno = EBADARG;
 		iResult = -1;
 	}
-	if (!iResult)
-		if (psVBFile [iHandle]->psKeyCurr [iKeyNumber]->sFlags.iIsDummy)
-		{
-			iserrno = iVBKeyLoad (iHandle, iKeyNumber, ISNEXT, TRUE, &psKey);
-			if (iserrno)
-				iResult = -1;
-		}
+	// By the time we get here, we're done with index positioning...
+	// If iResult == 0 then we have a valid row to read in
 	if (!iResult)
 	{
 		psVBFile [iHandle]->tRowStart = 0;
-		if (psVBFile [iHandle]->iOpenMode & ISAUTOLOCK || iMode & ISLOCK)
-		{
+		if (iMode & ISLOCK || psVBFile [iHandle]->iOpenMode & ISAUTOLOCK)
 			if (iVBDataLock (iHandle, iMode & ISWAIT ? VBWRLCKW : VBWRLOCK, psVBFile [iHandle]->psKeyCurr [iKeyNumber]->tRowNode, FALSE))
-			{
 				iserrno = iLockResult = ELOCKED;
-				iResult = -1;
-			}
-		}
 		if (!iLockResult)
-			iReadResult = iVBDataRead (iHandle, pcRow, &iDeleted, psVBFile [iHandle]->psKeyCurr [iKeyNumber]->tRowNode, TRUE);
-		if (!iReadResult && (!iLockResult || (iMode & ISSKIPLOCK && iserrno == ELOCKED)))
+			iResult = iVBDataRead (iHandle, pcRow, &iDeleted, psVBFile [iHandle]->psKeyCurr [iKeyNumber]->tRowNode, TRUE);
+		if (!iResult && (!iLockResult || (iMode & ISSKIPLOCK && iserrno == ELOCKED)))
 		{
 			isrecnum = psVBFile [iHandle]->psKeyCurr [iKeyNumber]->tRowNode;
 			psVBFile [iHandle]->tRowNumber = isrecnum;
 			psVBFile [iHandle]->sFlags.iIsDisjoint = 0;
-			iResult = 0;
 		}
 	}
-
-// BUG - Application of new locks?
 
 ReadExit:
 	iVBExit (iHandle);

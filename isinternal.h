@@ -7,9 +7,13 @@
  *	This is the header that defines the internally used structures for the
  *	VBISAM library.
  * Version:
- *	$Id: isinternal.h,v 1.3 2003/12/23 03:08:56 trev_vb Exp $
+ *	$Id: isinternal.h,v 1.4 2004/01/03 02:28:48 trev_vb Exp $
  * Modification History:
  *	$Log: isinternal.h,v $
+ *	Revision 1.4  2004/01/03 02:28:48  trev_vb
+ *	TvB 02Jan2004 WAY too many changes to enumerate!
+ *	TvB 02Jan2003 Transaction processing done (excluding iscluster)
+ *	
  *	Revision 1.3  2003/12/23 03:08:56  trev_vb
  *	TvB 22Dec2003 Minor compilation glitch 'fixes'
  *	
@@ -67,18 +71,35 @@
 #define	VBWRLOCK	3
 #define	VBWRLCKW	4
 
+// Values for iVBInTrans
+#define	VBNOTRANS	0
+#define	VBBEGIN		1
+#define	VBNEEDFLUSH	2
+#define	VBROLLBACK	3
+#define	VBRECOVER	4
+
 #ifdef	VBISAMMAIN
 #define	EXTERN
-	int	iVBMaxUsedHandle = -1;	// The highest opened file handle
-	int	iRowBufferLength = 0;
-	char	*pcRowBuffer = (char *) 0;// A common area for a data row
+	char	*pcRowBuffer = (char *) 0,
+		*pcWriteBuffer;		// Common areas for a data row
+	int	iVBMaxUsedHandle = -1,	// The highest opened file handle
+		iVBLogfileHandle = -1,	// The handle to the current logfile
+		iVBInTrans = VBNOTRANS,	// If not zero, we're in a transaction
+		iVBRowBufferLength = 0;
+	off_t	tLogfilePosition = 0;	// The logfile size at islogopen()
 #else	// VBISAMMAIN
 #define	EXTERN	extern
-extern	int	iVBMaxUsedHandle;
-extern	int	iRowBufferLength;
-extern	char	*pcRowBuffer;	// A common area for a data row
+extern	char	*pcRowBuffer,
+		*pcWriteBuffer;		// Common areas for a data row
+extern	int	iVBMaxUsedHandle,
+		iVBLogfileHandle,
+		iVBInTrans,
+		iVBRowBufferLength;
+extern	off_t	tLogfilePosition;
 #endif	// VBISAMMAIN
 
+EXTERN	pid_t	tVBPID;
+EXTERN	uid_t	tVBUID;
 EXTERN	int	iserrno,	// Value of error is returned here
 		iserrio,	// Contains value of last function called
 		isreclen;	// Used for varlen tables
@@ -162,11 +183,11 @@ struct	DICTNODE			// Offset	32Val	64Val
 		cNodeAudit [QUADSIZE],	// 0x31	0x4d	Varies	Same
 		cLockMethod [INTSIZE],	// 0x35	0x55	0x0008	Same
 		cRFU4 [QUADSIZE],	// 0x37	0x57	0x00...	Same
-		cMaxRowLength [INTSIZE],// 0x3b	0x5b	Varies	Same
-		cRFUVarlen [20],	// 0x3d	0x5d	0x00...	Same
-		cRFULocalIndex [36];	// 0x51	0x71	0x00...	Same
+		cMaxRowLength [INTSIZE],// 0x3b	0x5f	Varies	Same
+		cRFUVarlen [20],	// 0x3d	0x61	0x00...	Same
+		cRFULocalIndex [36];	// 0x51	0x75	0x00...	Same
 			//		   ---- ----
-			// Length Total	   0x76	0x96
+			// Length Total	   0x75	0x99
 };
 
 struct	DICTINFO
@@ -186,7 +207,8 @@ struct	DICTINFO
 		tRowStart,	// ONLY set to nonzero by isstart()
 		tTransLast,	// Used to see whether to set iIndexChanged
 		tNRows;		// Number of rows (0 IF EMPTY, 1 IF NOT)
-	char	**ppcRowBuffer;	// tMinRowLength buffer for key (re)construction
+	char	cFilename [MAX_PATH_LENGTH],
+		**ppcRowBuffer;	// tMinRowLength buffer for key (re)construction
 	struct	DICTNODE
 		sDictNode;	// Holds the dictionary node data
 	struct	keydesc		// Array of key description information
@@ -197,7 +219,8 @@ struct	DICTINFO
 		*psKeyFree [MAXSUBS], // An array of linked lists of free VBKEYs
 		*psKeyCurr [MAXSUBS]; // An array of 'current' VBKEY pointers
 	struct	VBLOCK		// Ordered linked list of locked row numbers
-		*psLocks;
+		*psLockHead,
+		*psLockTail;
 	struct
 	{	
 	unsigned int
@@ -211,7 +234,10 @@ struct	DICTINFO
 				//	0: Index has NOT changed since last time
 				//	1: Index has changed, blocks invalid
 				//	2: Index has changed, blocks are valid
-		iRFU:26;
+		iTransYet:1,	// Relates to isbegin () et al
+				//	0: No transactions yet
+				//	1: Guess!
+		iRFU:25;
 	} sFlags;
 };
 EXTERN	struct	DICTINFO
@@ -246,6 +272,9 @@ void	stdbl (double, char *);
 double	lddblnull (char *, short *);
 void	stdblnull (double, char *, short);
 
+// isaudit.c
+int	isaudit (int, char *, int);
+
 // isbuild.c
 int	isbuild (char *, int, struct keydesc *, int);
 int	isaddindex (int, struct keydesc *);
@@ -272,10 +301,30 @@ int	isrewcurr (int, char *);
 int	isrewrec (int, off_t, char *);
 
 // istrans.c
+int	isbegin (void);
+int	iscommit (void);
+int	islogclose (void);
+int	islogopen (char *);
+int	isrecover (void);
+int	isrollback (void);
+int	iVBTransBuild (char *, int, int, struct keydesc *);
+int	iVBTransCreateIndex (int, struct keydesc *);
+int	iVBTransCluster (void);	// BUG - Unknown args
+int	iVBTransDelete (int, off_t, int);
+int	iVBTransDeleteIndex (int, struct keydesc *);
+int	iVBTransErase (char *);
+int	iVBTransClose (int, char *);
+int	iVBTransOpen (int, char *);
+int	iVBTransInsert (int, off_t, int, char *);
+int	iVBTransRename (char *, char *);
+int	iVBTransSetUnique (int, off_t);
+int	iVBTransUniqueID (int, off_t);
+int	iVBTransUpdate (int, off_t, int, int, char *);
 
 // iswrite.c
 int	iswrcurr (int, char *);
 int	iswrite (int, char *);
+int	iVBWriteRow (int, char *, off_t);
 
 // vbDataIO.c
 int	iVBDataRead (int, void *, int *, off_t, int);

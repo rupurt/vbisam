@@ -8,9 +8,13 @@
  *	Only functions with external linkage (i.e. is*, ld* and st*) should be
  *	defined within this module.
  * Version:
- *	$Id: isHelper.c,v 1.2 2003/12/22 04:45:31 trev_vb Exp $
+ *	$Id: isHelper.c,v 1.3 2004/01/03 02:28:48 trev_vb Exp $
  * Modification History:
  *	$Log: isHelper.c,v $
+ *	Revision 1.3  2004/01/03 02:28:48  trev_vb
+ *	TvB 02Jan2004 WAY too many changes to enumerate!
+ *	TvB 02Jan2003 Transaction processing done (excluding iscluster)
+ *	
  *	Revision 1.2  2003/12/22 04:45:31  trev_vb
  *	TvB 21Dec2003 Modified header to correct case ('Id')
  *	
@@ -68,8 +72,8 @@ void	stdblnull (double, char *, short);
 int
 iscluster (int iHandle, struct keydesc *psKeydesc)
 {
-	// BUG Write me
-	return (-1);
+	// BUG Write iscluster() and don't forget to call iVBTransCluster
+	return (0);
 }
 
 /*
@@ -97,7 +101,7 @@ iserase (char *pcFilename)
 	sprintf (cBuffer, "%s.dat", pcFilename);
 	if (iVBUnlink (cBuffer))
 		goto EraseExit;
-	return (0);
+	return (iVBTransErase (pcFilename));
 EraseExit:
 	iserrno = errno;
 	return (-1);
@@ -166,16 +170,16 @@ isrelease (int iHandle)
 		*psLock,
 		*psLockNext;
 
-	psLock = psVBFile [iHandle]->psLocks;
+	psLock = psVBFile [iHandle]->psLockHead;
 	while (psLock)
 	{
 		psLockNext = psLock->psNext;
-		if (!psLock->iIsTransaction)
-		{
-			iserrno = iVBDataLock (iHandle, VBUNLOCK, psLock->tRowNumber, FALSE);
-			if (iserrno)
-				return (-1);
-		}
+		if (psLock->iIsTransaction)
+			return (0);
+// Note: this implicitly relies on the following to reset the psLockHead / Tail
+		iserrno = iVBDataLock (iHandle, VBUNLOCK, psLock->tRowNumber, FALSE);
+		if (iserrno)
+			return (-1);
 		psLock = psLockNext;
 	}
 	return (0);
@@ -219,7 +223,7 @@ isrename (char *pcOldName, char *pcNewName)
 	iResult = iVBUnlink (cBuffer [0]);
 	if (iResult == -1)
 		goto RenameExit;
-	return (0);
+	return (iVBTransRename (pcOldName, pcNewName));
 RenameExit:
 	iserrno = errno;
 	return (-1);
@@ -252,6 +256,9 @@ issetunique (int iHandle, off_t tUniqueID)
 		return (iResult);
 	iResult = iVBUniqueIDSet (iHandle, tUniqueID);
 
+	if (!iResult && iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
+		iResult = iVBTransSetUnique (iHandle, tUniqueID);
+	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
 	iResult2 = iVBExit (iHandle);
 	if (iResult)
 		return (iResult);
@@ -286,6 +293,9 @@ isuniqueid (int iHandle, off_t *ptUniqueID)
 
 	tValue = tVBUniqueIDGetNext (iHandle);
 
+	if (!iResult && iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
+		iResult = iVBTransUniqueID (iHandle, tValue);
+	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
 	iResult = iVBExit (iHandle);
 	*ptUniqueID = tValue;
 	return (iResult);
