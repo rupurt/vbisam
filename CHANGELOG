@@ -1,5 +1,5 @@
 06Jan2004 1.01Beta
-------------------
+==================
 Added COPYING.LIB and License line to each module header
 (Thanks to Johann von Nepomuk for spotting this huge oversight on my part!)
 
@@ -17,3 +17,111 @@ some free space left should belong to.  (Namely, IBM appears to have cutoffs at
 approach instead with cutoffs at 8bytes, 32bytes, 128bytes and 512bytes)
 To put it MILDLY, the varlen code should be considered 'UNSTABLE' in this
 release.
+
+06Jun2004 1.02-beta (D-Day!)
+============================
+Fixes list
+----------
+LOTS of changes!!! (Certain that I've NOT covered them all here)
+
+iswrite() was creating a row in the data file BEFORE having created the index
+entries associated with it.  If an EDUPL error resulted, the data row was not
+purged.  Fixed by delaying writing the data row till AFTER the indexes were
+added.
+
+Management of the data row free lists was a mess.  Previously deleted data rows
+were *not* being reused.
+
+Interprocess disturbances causing 105 (EBADFILE) errors were common during
+iswrite () and iscommit () operations
+
+Using the same transaction log file for multiple processes was causing 105
+(EBADFILE) errors
+
+iswrite was inserting a new row into the *WRONG* node if it was exactly
+replacing a row that had previously been deleted. (Including the dup number)
+
+iVBEnter () and iVBExit () code fixed to better handle concurrency
+(Most specifically, the handling of the iIsDictLocked to determine whether the
+iVBExit () call should update the dictionary node transaction number)
+Many source modules modified to change handling of iIsDictLocked.
+
+Minor 'touch ups' made to the internal cache handling functions iVBBlockXXXX()
+Also, externalized them into their own unique module (vbBlockIO.c) with a switch
+possible in isinternal.h to allow selection of caching. (VB_CACHE)
+
+Bug fixed where performing an isread (ISEQUAL) on a table where the index was
+ISDUPS would NOT find any matching rows if the FIRST (duplicate number 0) row
+of that key value had been deleted.
+
+I re-tested the suite 'performance' again (Thank goodness for strace) to
+see what else could be optimized...
+In doing so, I found a HUGE saving in the TreeLoad function.
+Instead of searching the linked-list of keys in the VBTREE structure, I
+implemented a simple array of keys and devised a crude but effective list
+bi-section algorithm.  VBISAM now beats the pants off the competition!
+It's possible that I can optimize this even further and, based
+upon the DRAMATIC improvements it's offered thus far, I will probably do so.
+Also, I need to phase out the old use of the psKeyFirst and psKeyLast values
+held in the VBTREE structure.
+
+Fixed up the isrecover () code to truly recover things as it should!
+
+Wrote a simple program (vbRecover) that performs the actual isrecover given the
+name of the log file on the command line
+
+Wrote the beginnings of the VBISAM equivalent to bcheck as vbCheck
+
+Known Issues
+------------
+STILL have not bothered to write iscluster ()
+I simply CANNOT see enough relevance to do so
+
+STILL have not bothered to write isaudit ()
+Does *ANYONE* out there really USE this?
+
+Need to test the functionality of deleting a row within a transaction...
+Should it be possible for an unrelated process to create a row with the SAME
+unique index values before the transaction has been 'committed'?
+Interestingly enough, C-ISAM Vn 7.2 fails MISERABLY on this issue to the point
+where the DataFree list in the index file becomes corrupted.
+See the bug files on SF.net titled "When is a bug NOT a bug?"
+Note for self to fully implement ACID within VBISAM
+This is in the process of being addressed by way of the 2PC (Two Phase Commit)
+but is NOT fully implemented in this release!
+A strong CAVEAT with respect to the 2PC code is that the index file of a given
+table will be left in an inconsistent state for much longer periods than the
+competition.  Specifically, any key deletion will *NOT* take effect until the
+transaction is completed with an isrollback or iscommit call.  A system-crash
+occuring during a transaction thus leaves the index file a little 'screwed up'.
+However, the vbCheck and isrecover system of VBISAM automagically deals with
+this issue.  Furthermore, it is always good programming practice to make any
+transaction as short as possible (thereby minimizing the effect) and it's also
+good practice to at least vbCheck (if not completely recover) the effected
+tables subsequent to a system crash.
+
+Need to fully test the row release code in isHelper.c (isrelease, isrelrec and
+isrelcurr).  Specifically, I want to make sure that they are 'transaction-safe'
+
+Many function calls are still made without testing the return value.  Most of
+these are flagged in the source with a comment containing the word 'BUG'.
+
+Still need to 'complete' the isrecover code to handle the following transaction
+types:
+	VBL_BUILD, VBL_CREINDEX, VBL_DELINDEX, VBL_CLUSTER
+	VBL_FILEERASE, VBL_RENAME, VBL_SETUNIQUE, VBL_UNIQUEID
+
+Still haven't implemented the virtual file system.  If I bother at all with
+doing so, it will come *AFTER* the 2PC code.
+
+With all the changes made in this release, I've not yet ascertained whether the
+64-bit file I/O is fully functional.  I have no specific reason to suspect to
+the contrary, but YMMV.  Let me know if you encounter any issues.
+
+Summary
+-------
+All in all, quite a valuable release this time IMNSHO. Give it a few weeks time
+to allow things to 'settle' and I'll seriously consider moving the SF.net status
+of VBISAM from BETA to whatever comes next...
+As always, many thanks to those in the virtual OSS world who have assisted me
+to 'polish' VBISAM to its current state.  Feature requests are *ALWAYS* welcome

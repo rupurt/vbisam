@@ -7,9 +7,12 @@
  * Description:
  *	This module deals with the opening and closing of VBISAM files
  * Version:
- *	$Id: isopen.c,v 1.6 2004/01/10 16:21:27 trev_vb Exp $
+ *	$Id: isopen.c,v 1.7 2004/06/06 20:52:21 trev_vb Exp $
  * Modification History:
  *	$Log: isopen.c,v $
+ *	Revision 1.7  2004/06/06 20:52:21  trev_vb
+ *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
+ *	
  *	Revision 1.6  2004/01/10 16:21:27  trev_vb
  *	JvN 10Jan2004 Johann the 'super-sleuth detective' found an errant semi-colon
  *	
@@ -33,13 +36,14 @@
 #include	"isinternal.h"
 
 static	int	iInitialized = FALSE;
-static	char	cNode0 [MAX_NODE_LENGTH];
 
 /*
  * Prototypes
  */
 int	iscleanup (void);
 int	isclose (int);
+int	iVBClose2 (int);
+int	iVBClose3 (int);
 int	isindexinfo (int, struct keydesc *, int);
 int	isopen (char *, int);
 static	off_t	tCountRows (int);
@@ -65,12 +69,28 @@ iscleanup (void)
 		iResult2 = 0;
 
 	for (iLoop = 0; iLoop <= iVBMaxUsedHandle; iLoop++)
-		if (psVBFile [iLoop] != (struct DICTINFO *) 0)
+		if (psVBFile [iLoop])
 		{
-			iResult = isclose (iLoop);
-			if (iResult)
-				iResult2 = iserrno;
+			if (psVBFile [iLoop]->iIsOpen == 0)
+			{
+				iResult = isclose (iLoop);
+				if (iResult)
+					iResult2 = iserrno;
+			}
+			if (psVBFile [iLoop]->iIsOpen == 1)
+			{
+				iResult = iVBClose2 (iLoop);
+				if (iResult)
+					iResult2 = iserrno;
+			}
+			iVBClose3 (iLoop);
 		}
+	if (iVBLogfileHandle != -1)
+	{
+		iResult = islogclose ();
+		if (iResult)
+			iResult2 = iserrno;
+	}
 	return (iResult2);
 }
 
@@ -91,26 +111,95 @@ iscleanup (void)
 int
 isclose (int iHandle)
 {
-	char	cFilename [MAX_PATH_LENGTH + 1];
-	int	iLoop,
-		iResult;
-	struct	VBLOCK
-		*psRowLock;
-
-	if (iHandle < 0 || iHandle > iVBMaxUsedHandle)
+	if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen)
 	{
 		iserrno = ENOTOPEN;
 		return (-1);
 	}
-	if (psVBFile [iHandle] == (struct DICTINFO *) 0)
-		goto CLOSE_ERR;
 	if (psVBFile [iHandle]->iOpenMode & ISEXCLLOCK)
-		iVBForceExit (iHandle);	// Bug - Check retval
+		iVBForceExit (iHandle);	// BUG retval
+	iVBBlockFlush (iHandle);	// BUG retval
 	vVBBlockInvalidate (iHandle);
 	psVBFile [iHandle]->sFlags.iIndexChanged = 0;
-	iResult = iVBClose (psVBFile [iHandle]->iDataHandle);
-	iResult = iVBClose (psVBFile [iHandle]->iIndexHandle);
-	memcpy (cFilename, psVBFile [iHandle]->cFilename, MAX_PATH_LENGTH);
+	psVBFile [iHandle]->iIsOpen = 1;
+	if (!(iVBInTrans == VBBEGIN || iVBInTrans == VBNEEDFLUSH || iVBInTrans == VBRECOVER))
+		if (iVBClose2 (iHandle))
+			return (-1);
+	return (0);
+}
+
+/*
+ * Name:
+ *	int	iVBClose2 (int iHandle);
+ * Arguments:
+ *	int	iHandle
+ *		The currently open VBISAM handle
+ * Prerequisites:
+ *	NONE
+ * Returns:
+ *	0	Success
+ *	-1	An error occurred.  iserrno contains the reason
+ * Problems:
+ *	NONE known
+ * Comments:
+ *	The isclose () function does not *COMPLETELY* close a table *IF* the
+ *	call to isclose () occurred during a transaction.  This is to make sure
+ *	that rowlocks held during a transaction are retained.  This function is
+ *	the 'middle half' that performs the (possibly delayed) physical close.
+ *	The 'lower half' (iVBClose3) frees up the cached stuff.
+ */
+int
+iVBClose2 (int iHandle)
+{
+	int	iLoop;
+	struct	VBLOCK
+		*psRowLock;
+
+	iserrno = iVBTransClose (iHandle, psVBFile [iHandle]->cFilename);
+	if (iVBClose (psVBFile [iHandle]->iDataHandle))
+		iserrno = errno;
+	psVBFile [iHandle]->iDataHandle = -1;
+	if (iVBClose (psVBFile [iHandle]->iIndexHandle))
+		iserrno = errno;
+	psVBFile [iHandle]->iIndexHandle = -1;
+	psVBFile [iHandle]->iIsOpen = 2;
+	psVBFile [iHandle]->tDataPosn = -1;
+	psVBFile [iHandle]->tIndexPosn = -1;
+	psVBFile [iHandle]->tRowNumber = -1;
+	psVBFile [iHandle]->tDupNumber = -1;
+	while (psVBFile [iHandle]->psLockHead)
+	{
+		psRowLock = psVBFile [iHandle]->psLockHead->psNext;
+		vVBLockFree (psVBFile [iHandle]->psLockHead);
+		psVBFile [iHandle]->psLockHead = psRowLock;
+	}
+	psVBFile [iHandle]->psLockTail = psVBFile [iHandle]->psLockHead;
+	psVBFile [iHandle]->sFlags.iTransYet = 0;
+	for (iLoop = 0; iLoop < MAXSUBS; iLoop++)
+		psVBFile [iHandle]->psKeyCurr [iLoop] = VBKEY_NULL;
+
+	return (iserrno ? -1 : 0);
+}
+
+/*
+ * Name:
+ *	int	iVBClose3 (int iHandle);
+ * Arguments:
+ *	int	iHandle
+ *		The currently 'quasi-open' VBISAM handle
+ * Prerequisites:
+ *	NONE
+ * Returns:
+ *	0	Success
+ *	-1	An error occurred.  iserrno contains the reason
+ * Problems:
+ *	NONE known
+ */
+int
+iVBClose3 (int iHandle)
+{
+	int	iLoop;
+
 	for (iLoop = 0; iLoop < MAXSUBS; iLoop++)
 	{
 		vVBTreeAllFree (iHandle, iLoop, psVBFile [iHandle]->psTree [iLoop]);
@@ -120,21 +209,9 @@ isclose (int iHandle)
 			vVBFree (psVBFile [iHandle]->psKeydesc [iLoop], sizeof (struct keydesc));
 		}
 	}
-	while (psVBFile [iHandle]->psLockHead)
-	{
-		psRowLock = psVBFile [iHandle]->psLockHead->psNext;
-		vVBLockFree (psVBFile [iHandle]->psLockHead);
-		psVBFile [iHandle]->psLockHead = psRowLock;
-	}
-	iVBTransClose (iHandle, cFilename);
 	vVBFree (psVBFile [iHandle], sizeof (struct DICTINFO));
 	psVBFile [iHandle] = (struct DICTINFO *) 0;
-
 	return (0);
-
-CLOSE_ERR:
-	iserrno = EBADARG;
-	return (-1);
 }
 
 /*
@@ -164,12 +241,11 @@ isindexinfo (int iHandle, struct keydesc *psKeydesc, int iKeyNumber)
 	struct	dictinfo
 		sDict;
 
-	// Sanity check - Is iHandle a currently open table?
-	iserrno = ENOTOPEN;
-	if (iHandle < 0 || iHandle > iVBMaxUsedHandle)
+	if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen)
+	{
+		iserrno = ENOTOPEN;
 		return (-1);
-	if (!psVBFile [iHandle])
-		return (-1);
+	}
 	iserrno = EBADKEY;
 	if (iKeyNumber < 0 || iKeyNumber > psVBFile [iHandle]->iNKeys)
 		return (-1);
@@ -242,7 +318,7 @@ isopen (char *pcFilename, int iMode)
 	}
 	if (iMode & ISTRANS && iVBLogfileHandle == -1)
 	{
-		iserrno = EBADARG;
+		iserrno = EBADARG;	// I'd have expected ENOLOG or ENOTRANS!
 		return (-1);
 	}
 	iFlags = iMode & 0x03;
@@ -252,15 +328,55 @@ isopen (char *pcFilename, int iMode)
 		iserrno = EBADARG;
 		return (-1);
 	}
-	iserrno = EFNAME;
 	if (strlen (pcFilename) > MAX_PATH_LENGTH - 4)
+	{
+		iserrno = EFNAME;
 		return (-1);
+	}
+	/*
+	 * The following for loop deals with the concept of re-opening a file
+	 * that was closed within the SAME transaction.  Since we were not
+	 * allowed to perform the FULL close during the transaction because we
+	 * needed to retain all the transactional locks, we can tremendously
+	 * simplify the re-opening process.
+	 */
 	for (iHandle = 0; iHandle <= iVBMaxUsedHandle; iHandle++)
 	{
-		if (psVBFile [iHandle] == (struct DICTINFO *) 0)
+		if (psVBFile [iHandle] && psVBFile [iHandle]->iIsOpen != 0)
+		{
+			if (!strcmp (psVBFile [iHandle]->cFilename, pcFilename))
+			{
+				if (psVBFile [iHandle]->iIsOpen == 2)
+				{
+					sprintf (cVBNode [0], "%s.idx", pcFilename);
+					psVBFile [iHandle]->iIndexHandle = iVBOpen (cVBNode [0], O_RDWR, 0);
+					sprintf (cVBNode [0], "%s.dat", pcFilename);
+					psVBFile [iHandle]->iDataHandle = iVBOpen (cVBNode [0], O_RDWR, 0);
+				}
+				psVBFile [iHandle]->iIsOpen = 0;
+				psVBFile [iHandle]->iOpenMode = iMode;
+				return (iHandle);
+			}
+		}
+	}
+	for (iHandle = 0; iHandle <= iVBMaxUsedHandle; iHandle++)
+	{
+		if (!psVBFile [iHandle])
 		{
 			iFound = TRUE;
 			break;
+		}
+	}
+	if (!iFound)
+	{
+		for (iHandle = 0; iHandle <= iVBMaxUsedHandle; iHandle++)
+		{
+			if (psVBFile [iHandle] && psVBFile [iHandle]->iIsOpen == 2)
+			{
+				iVBClose3 (iHandle);
+				iFound = TRUE;
+				break;
+			}
 		}
 	}
 	if (!iFound)
@@ -280,27 +396,28 @@ isopen (char *pcFilename, int iMode)
 	memcpy (psFile->cFilename, pcFilename, strlen (pcFilename) + 1);
 	psFile->iDataHandle = -1;
 	psFile->iIndexHandle = -1;
-	sprintf (cNode0, "%s.dat", pcFilename);
-	if (iVBAccess (cNode0, F_OK))
+	sprintf (cVBNode [0], "%s.dat", pcFilename);
+	if (iVBAccess (cVBNode [0], F_OK))
 	{
 		errno = ENOENT;
 		goto OPEN_ERR;
 	}
-	sprintf (cNode0, "%s.idx", pcFilename);
-	if (iVBAccess (cNode0, F_OK))
+	sprintf (cVBNode [0], "%s.idx", pcFilename);
+	if (iVBAccess (cVBNode [0], F_OK))
 	{
 		errno = ENOENT;
 		goto OPEN_ERR;
 	}
-	psFile->iIndexHandle = iVBOpen (cNode0, O_RDWR, 0);
+	psFile->iIndexHandle = iVBOpen (cVBNode [0], O_RDWR, 0);
 	if (psFile->iIndexHandle < 0)
 		goto OPEN_ERR;
-	sprintf (cNode0, "%s.dat", pcFilename);
-	psFile->iDataHandle = iVBOpen (cNode0, O_RDWR, 0);
+	sprintf (cVBNode [0], "%s.dat", pcFilename);
+	psFile->iDataHandle = iVBOpen (cVBNode [0], O_RDWR, 0);
 	if (psFile->iDataHandle < 0)
 		goto OPEN_ERR;
 	psVBFile [iHandle]->tDataPosn = 0;
 	psVBFile [iHandle]->tIndexPosn = 0;
+	psVBFile [iHandle]->iIsOpen = 0;
 
 	psFile->iNodeSize = MAX_NODE_LENGTH;
 	iResult = iVBEnter (iHandle, TRUE);	// Reads in dictionary node
@@ -362,14 +479,13 @@ isopen (char *pcFilename, int iMode)
 	// Fill in the keydesc stuff
 	while (tNodeNumber)
 	{
-		//iResult = iVBNodeRead (iHandle, (void *) cNode0, tNodeNumber);
-		iResult = iVBBlockRead (iHandle, TRUE, tNodeNumber, cNode0);
+		iResult = iVBBlockRead (iHandle, TRUE, tNodeNumber, cVBNode [0]);
 		errno = iserrno;
 		if (iResult)
 			goto OPEN_ERR;
-		pcTemp = cNode0;
+		pcTemp = cVBNode [0];
 		errno = EBADFILE;
-		if (*(cNode0 + psFile->iNodeSize - 3) != -1 || *(cNode0 + psFile->iNodeSize - 2) != 0x7e)
+		if (*(cVBNode [0] + psFile->iNodeSize - 3) != -1 || *(cVBNode [0] + psFile->iNodeSize - 2) != 0x7e)
 			goto OPEN_ERR;
 		iLengthUsed = ldint (pcTemp);
 		pcTemp += INTSIZE;
@@ -436,7 +552,11 @@ isopen (char *pcFilename, int iMode)
 		goto OPEN_ERR;
 	}
 
-	psVBFile [iHandle]->tTransLast = -1;
+	if (iVBInTrans == VBNOTRANS)
+	{
+		iVBTransOpen (iHandle, pcFilename);
+		psVBFile [iHandle]->sFlags.iTransYet = 1;
+	}
 	return (iHandle);
 OPEN_ERR:
 	iVBExit (iHandle);
@@ -483,13 +603,12 @@ tCountRows (int iHandle)
 	off_t	tNodeNumber,
 		tDataCount;
 
-	psFree = (struct FREENODE *) &cNode0;
+	psFree = (struct FREENODE *) &cVBNode [0];
 	tNodeNumber = ldquad ((char *) psVBFile [iHandle]->sDictNode.cDataFree);
 	tDataCount = ldquad ((char *) psVBFile [iHandle]->sDictNode.cDataCount);
 	while (tNodeNumber)
 	{
-		//if (iVBNodeRead (iHandle, (void *) cNode0, tNodeNumber))
-		if (iVBBlockRead (iHandle, TRUE, tNodeNumber, cNode0))
+		if (iVBBlockRead (iHandle, TRUE, tNodeNumber, cVBNode [0]))
 			return (-1);
 		iNodeUsed = ldint (psFree->cNodeUsed);
 		iNodeUsed -= 4 + (INTSIZE * 2) + QUADSIZE;

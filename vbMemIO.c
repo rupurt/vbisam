@@ -8,9 +8,12 @@
  *	This is the module that deals with *ALL* memory (de-)allocation for the
  *	VBISAM library.
  * Version:
- *	$Id: vbMemIO.c,v 1.6 2004/01/06 14:31:59 trev_vb Exp $
+ *	$Id: vbMemIO.c,v 1.7 2004/06/06 20:52:21 trev_vb Exp $
  * Modification History:
  *	$Log: vbMemIO.c,v $
+ *	Revision 1.7  2004/06/06 20:52:21  trev_vb
+ *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
+ *	
  *	Revision 1.6  2004/01/06 14:31:59  trev_vb
  *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
  *	
@@ -444,28 +447,30 @@ void
 vVBUnMalloc (void)
 {
 	struct	VBLOCK
-		*psLockCurr = psLockFree;
+		*psLockCurr;
 	struct	VBTREE
-		*psTreeCurr = psTreeFree;
+		*psTreeCurr;
 
+	iscleanup ();
 	if (pcRowBuffer)
 		vVBFree (pcRowBuffer, iVBRowBufferLength);
 	if (pcWriteBuffer)
 		vVBFree (pcWriteBuffer, iVBRowBufferLength);
 	pcRowBuffer = (char *) 0;
+	psLockCurr = psLockFree;
 	while (psLockCurr)
 	{
 		psLockFree = psLockFree->psNext;
 		vVBFree (psLockCurr, sizeof (struct VBLOCK));
 		psLockCurr = psLockFree;
 	}
+	psTreeCurr = psTreeFree;
 	while (psTreeCurr)
 	{
 		psTreeFree = psTreeFree->psNext;
 		vVBFree (psTreeCurr, sizeof (struct VBTREE));
 		psTreeCurr = psTreeFree;
 	}
-	iscleanup ();
 	vVBBlockDeinit ();
 #ifdef	DEBUG
 	vVBMallocReport ();

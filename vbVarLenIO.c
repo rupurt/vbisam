@@ -1,15 +1,19 @@
 /*
  * Title:	vbVarLenIO.c
  * Copyright:	(C) 2003 Trevor van Bremen
+ * License:	LGPL - See COPYING.LIB
  * Author:	Trevor van Bremen
  * Created:	05Jan2004
  * Description:
  *	This is the 'behind-the-scenes' module that deals with any variable
  *	length row processing in the VBISAM library.
  * Version:
- *	$Id: vbVarLenIO.c,v 1.1 2004/01/06 14:31:59 trev_vb Exp $
+ *	$Id: vbVarLenIO.c,v 1.2 2004/06/06 20:52:21 trev_vb Exp $
  * Modification History:
  *	$Log: vbVarLenIO.c,v $
+ *	Revision 1.2  2004/06/06 20:52:21  trev_vb
+ *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
+ *	
  *	Revision 1.1  2004/01/06 14:31:59  trev_vb
  *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
  *	
@@ -437,7 +441,7 @@ tTailNode (int iHandle, char *pcBuffer, int iLength, int *piSlotNumber)
 		if (psHdr->cGroup >= 0)
 			stquad (tNodeNext, psVBFile [iHandle]->sDictNode.cVarlenG0 + (psHdr->cGroup * QUADSIZE));
 		stquad (tNodeNumber, psVBFile [iHandle]->sDictNode.cVarlenG0 + (iGroup * QUADSIZE));
-		psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
+		psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 		psHdr->cGroup = iGroup;
 		if (iVBBlockWrite (iHandle, TRUE, tNodeNumber, cLclNode))
 			return (-1);

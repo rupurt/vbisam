@@ -9,9 +9,12 @@
  *	Only functions with external linkage (i.e. is*, ld* and st*) should be
  *	defined within this module.
  * Version:
- *	$Id: isHelper.c,v 1.7 2004/03/23 22:14:28 trev_vb Exp $
+ *	$Id: isHelper.c,v 1.8 2004/06/06 20:52:21 trev_vb Exp $
  * Modification History:
  *	$Log: isHelper.c,v $
+ *	Revision 1.8  2004/06/06 20:52:21  trev_vb
+ *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
+ *	
  *	Revision 1.7  2004/03/23 22:14:28  trev_vb
  *	TvB 23Mar2004 Ooops, forgot the 2byte short->int offset in stint code!
  *	
@@ -140,6 +143,11 @@ EraseExit:
 int
 isflush (int iHandle)
 {
+	if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen)
+	{
+		iserrno = ENOTOPEN;
+		return (-1);
+	}
 	return (iVBBlockFlush (iHandle));
 }
 
@@ -160,6 +168,11 @@ isflush (int iHandle)
 int
 islock (int iHandle)
 {
+	if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen)
+	{
+		iserrno = ENOTOPEN;
+		return (-1);
+	}
 	return (iVBDataLock (iHandle, VBWRLOCK, 0, FALSE));
 }
 
@@ -185,7 +198,7 @@ isrelcurr (int iHandle)
 		*psLock,
 		*psLockNext;
 
-	if (!psVBFile [iHandle])
+	if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen)
 	{
 		iserrno = ENOTOPEN;
 		return (-1);
@@ -234,7 +247,7 @@ isrelease (int iHandle)
 		*psLock,
 		*psLockNext;
 
-	if (!psVBFile [iHandle])
+	if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen)
 	{
 		iserrno = ENOTOPEN;
 		return (-1);
@@ -278,7 +291,7 @@ isrelrec (int iHandle, off_t tRowNumber)
 		*psLock,
 		*psLockNext;
 
-	if (!psVBFile [iHandle])
+	if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen)
 	{
 		iserrno = ENOTOPEN;
 		return (-1);
@@ -371,9 +384,9 @@ issetunique (int iHandle, off_t tUniqueID)
 		return (iResult);
 	iResult = iVBUniqueIDSet (iHandle, tUniqueID);
 
-	if (!iResult && iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
+	if (!iResult)
 		iResult = iVBTransSetUnique (iHandle, tUniqueID);
-	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
+	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 	iResult2 = iVBExit (iHandle);
 	if (iResult)
 		return (iResult);
@@ -408,9 +421,9 @@ isuniqueid (int iHandle, off_t *ptUniqueID)
 
 	tValue = tVBUniqueIDGetNext (iHandle);
 
-	if (!iResult && iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
+	if (!iResult)
 		iResult = iVBTransUniqueID (iHandle, tValue);
-	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
+	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 	iResult = iVBExit (iHandle);
 	*ptUniqueID = tValue;
 	return (iResult);
@@ -433,6 +446,11 @@ isuniqueid (int iHandle, off_t *ptUniqueID)
 int
 isunlock (int iHandle)
 {
+	if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen)
+	{
+		iserrno = ENOTOPEN;
+		return (-1);
+	}
 	return (iVBDataLock (iHandle, VBUNLOCK, 0, FALSE));
 }
 

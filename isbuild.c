@@ -9,9 +9,12 @@
  *	table.  It also implements the isaddindex () and isdelindex () as these
  *	are predominantly only called at isbuild () time.
  * Version:
- *	$Id: isbuild.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
+ *	$Id: isbuild.c,v 1.6 2004/06/06 20:52:21 trev_vb Exp $
  * Modification History:
  *	$Log: isbuild.c,v $
+ *	Revision 1.6  2004/06/06 20:52:21  trev_vb
+ *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
+ *	
  *	Revision 1.5  2004/01/06 14:31:59  trev_vb
  *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
  *	
@@ -31,9 +34,6 @@
  */
 #include	"isinternal.h"
 
-static	char	cNode0 [MAX_NODE_LENGTH],
-		cNode1 [MAX_NODE_LENGTH];
-
 /*
  * Prototypes
  */
@@ -42,6 +42,8 @@ int	isaddindex (int, struct keydesc *);
 int	isdelindex (int, struct keydesc *);
 static	int	iAddKeydescriptor (int, struct keydesc *);
 static	off_t	tDelKeydescriptor (int, struct keydesc *, int);
+static	int	iDelNodes (int, int, off_t);
+static	int	iMakeKeysFromData (int, int);
 
 /*
  * Name:
@@ -120,34 +122,37 @@ isbuild (char *pcFilename, int iMaxRowLength, struct keydesc *psKey, int iMode)
 	iserrno = EBADARG;
 	if (iVBCheckKey (iHandle, psKey, 0, iMinRowLength, TRUE))
 		return (-1);
-	sprintf (cNode0, "%s.dat", pcFilename);
-	if (!iVBAccess (cNode0, F_OK))
+	sprintf (cVBNode [0], "%s.dat", pcFilename);
+	if (!iVBAccess (cVBNode [0], F_OK))
 	{
 		errno = EEXIST;
 		goto BUILD_ERR;
 	}
-	sprintf (cNode0, "%s.idx", pcFilename);
-	if (!iVBAccess (cNode0, F_OK))
+	sprintf (cVBNode [0], "%s.idx", pcFilename);
+	if (!iVBAccess (cVBNode [0], F_OK))
 	{
 		errno = EEXIST;
 		goto BUILD_ERR;
 	}
-	psVBFile [iHandle]->iIndexHandle = iVBOpen (cNode0, iFlags | O_CREAT, 0666);
+	psVBFile [iHandle]->iIndexHandle = iVBOpen (cVBNode [0], iFlags | O_CREAT, 0666);
 	if (psVBFile [iHandle]->iIndexHandle < 0)
 		goto BUILD_ERR;
-	sprintf (cNode0, "%s.dat", pcFilename);
-	psVBFile [iHandle]->iDataHandle = iVBOpen (cNode0, iFlags | O_CREAT, 0666);
+	sprintf (cVBNode [0], "%s.dat", pcFilename);
+	psVBFile [iHandle]->iDataHandle = iVBOpen (cVBNode [0], iFlags | O_CREAT, 0666);
 	if (psVBFile [iHandle]->iDataHandle < 0)
+	{
+		iVBClose (psVBFile [iHandle]->iIndexHandle);	// Ignore ret
 		goto BUILD_ERR;
+	}
 	psVBFile [iHandle]->tIndexPosn = 0;
 	psVBFile [iHandle]->tDataPosn = 0;
 	psVBFile [iHandle]->iNKeys = 1;
 	psVBFile [iHandle]->iNodeSize = MAX_NODE_LENGTH;
 	psVBFile [iHandle]->iOpenMode = iMode;
-	psVBFile [iHandle]->sFlags.iIsDictLocked = 1;
+	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x01;
 
 	// Setup root (dictionary) node (Node 1)
-	memset (cNode0, 0, MAX_NODE_LENGTH);
+	memset (cVBNode [0], 0, MAX_NODE_LENGTH);
 	memset ((void *) &psVBFile [iHandle]->sDictNode, 0, sizeof (struct DICTNODE));
 #if	_FILE_OFFSET_BITS == 64
 	psVBFile [iHandle]->sDictNode.cValidation [0] = 'V';
@@ -181,13 +186,18 @@ isbuild (char *pcFilename, int iMaxRowLength, struct keydesc *psKey, int iMode)
 		stint (iMaxRowLength, psVBFile [iHandle]->sDictNode.cMaxRowLength);
 	else
 		stint (0, psVBFile [iHandle]->sDictNode.cMaxRowLength);
-	memcpy (cNode0, &psVBFile [iHandle]->sDictNode, sizeof (struct DICTNODE));
-	//iVBNodeWrite (iHandle, (void *) cNode0, (off_t) 1);
-	iVBBlockWrite (iHandle, TRUE, (off_t) 1, cNode0);
+	memcpy (cVBNode [0], &psVBFile [iHandle]->sDictNode, sizeof (struct DICTNODE));
+	if (iVBBlockWrite (iHandle, TRUE, (off_t) 1, cVBNode [0]))
+	{
+		iVBClose (psVBFile [iHandle]->iIndexHandle);	// Ignore ret
+		iVBClose (psVBFile [iHandle]->iDataHandle);	// Ignore ret
+		vVBFree (psVBFile [iHandle], sizeof (struct DICTINFO));
+		return (-1);
+	}
 
 	// Setup first keydesc node (Node 2)
-	memset (cNode0, 0, MAX_NODE_LENGTH);
-	pcTemp = cNode0;
+	memset (cVBNode [0], 0, MAX_NODE_LENGTH);
+	pcTemp = cVBNode [0];
 	pcTemp += INTSIZE;
 	stquad (0, pcTemp);			// Next keydesc node
 	pcTemp += QUADSIZE;
@@ -211,29 +221,39 @@ isbuild (char *pcFilename, int iMaxRowLength, struct keydesc *psKey, int iMode)
 		*pcTemp = psKey->sPart [iLoop].iType;		// Type
 		pcTemp++;
 	}
-	stint (pcTemp - cNode0, cNode0);	// Length used
-	stint (0xff7e, cNode0 + MAX_NODE_LENGTH - 3);
-	//iVBNodeWrite (iHandle, (void *) cNode0, (off_t) 2);
-	iVBBlockWrite (iHandle, TRUE, (off_t) 2, cNode0);
+	stint (pcTemp - cVBNode [0], cVBNode [0]);	// Length used
+	stint (0xff7e, cVBNode [0] + MAX_NODE_LENGTH - 3);
+	if (iVBBlockWrite (iHandle, TRUE, (off_t) 2, cVBNode [0]))
+	{
+		iVBClose (psVBFile [iHandle]->iIndexHandle);	// Ignore ret
+		iVBClose (psVBFile [iHandle]->iDataHandle);	// Ignore ret
+		vVBFree (psVBFile [iHandle], sizeof (struct DICTINFO));
+		return (-1);
+	}
 
 	if (psKey->iNParts)
 	{
 		// Setup key root node (Node 3)
-		memset (cNode0, 0, MAX_NODE_LENGTH);
+		memset (cVBNode [0], 0, MAX_NODE_LENGTH);
 #if	_FILE_OFFSET_BITS == 64
-		stint (INTSIZE + QUADSIZE, cNode0);
-		stquad (1, cNode0 + INTSIZE);		// Transaction number
+		stint (INTSIZE + QUADSIZE, cVBNode [0]);
+		stquad (1, cVBNode [0] + INTSIZE);		// Transaction number
 #else	// _FILE_OFFSET_BITS == 64
-		stint (INTSIZE, cNode0);
+		stint (INTSIZE, cVBNode [0]);
 #endif	// _FILE_OFFSET_BITS == 64
-		//iVBNodeWrite (iHandle, (void *) cNode0, (off_t) 3);
-		iVBBlockWrite (iHandle, TRUE, (off_t) 3, cNode0);
+		if (iVBBlockWrite (iHandle, TRUE, (off_t) 3, cVBNode [0]))
+		{
+			iVBClose (psVBFile [iHandle]->iIndexHandle);	// Ignore ret
+			iVBClose (psVBFile [iHandle]->iDataHandle);	// Ignore ret
+			vVBFree (psVBFile [iHandle], sizeof (struct DICTINFO));
+			return (-1);
+		}
 	}
 
-	iVBBlockFlush (iHandle);
+	psVBFile [iHandle]->iIsOpen = 0;	// Mark it as FULLY open
 	isclose (iHandle);
 	iserrno = 0;
-	iVBTransBuild (pcFilename, iMinRowLength, iMaxRowLength, psKey);
+	iVBTransBuild (pcFilename, iMinRowLength, iMaxRowLength, psKey, iMode);
 	return (isopen (pcFilename, iMode));
 BUILD_ERR:
 	if (psVBFile [iHandle] != (struct DICTINFO *) 0)
@@ -262,14 +282,14 @@ BUILD_ERR:
 int
 isaddindex (int iHandle, struct keydesc *psKeydesc)
 {
-	int	iResult,
+	int	iResult = -1,
 		iKeyNumber;
 
 	iResult = iVBEnter (iHandle, TRUE);
 	if (iResult)
 		return (-1);
 
-	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
+	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 	iserrno = ENOTEXCL;
 	if (!(psVBFile [iHandle]->iOpenMode & ISEXCLLOCK))
 		goto AddIndexExit;
@@ -296,8 +316,9 @@ isaddindex (int iHandle, struct keydesc *psKeydesc)
 	if (!psVBFile [iHandle]->psKeydesc [iKeyNumber])
 		goto AddIndexExit;
 	memcpy (psVBFile [iHandle]->psKeydesc [iKeyNumber], psKeydesc, sizeof (struct keydesc));
-	if (iVBMakeKeysFromData (iHandle, iKeyNumber))
+	if (iMakeKeysFromData (iHandle, iKeyNumber))
 	{
+// BUG - Handle this better!
 		iResult = iserrno;
 		iVBExit (iHandle);
 		isdelindex (iHandle, psKeydesc);
@@ -305,11 +326,11 @@ isaddindex (int iHandle, struct keydesc *psKeydesc)
 		goto AddIndexExit;
 	}
 	iserrno = 0;
-	iVBTransCreateIndex (iHandle, psKeydesc);
+	iResult = iVBTransCreateIndex (iHandle, psKeydesc);
 
 AddIndexExit:
-	iVBExit (iHandle);
-	if (iserrno)
+	iResult |= iVBExit (iHandle);
+	if (iResult)
 		return (-1);
 	return (0);
 }
@@ -338,11 +359,9 @@ isdelindex (int iHandle, struct keydesc *psKeydesc)
 		iLoop;
 	off_t	tRootNode;
 
-	iResult = iVBEnter (iHandle, TRUE);
-	if (iResult)
+	if (iVBEnter (iHandle, TRUE))
 		return (-1);
 
-	iResult = -1;
 	if (!(psVBFile [iHandle]->iOpenMode & ISEXCLLOCK))
 	{
 		iserrno = ENOTEXCL;
@@ -362,7 +381,8 @@ isdelindex (int iHandle, struct keydesc *psKeydesc)
 	tRootNode = tDelKeydescriptor (iHandle, psKeydesc, iKeyNumber);
 	if (tRootNode < 1)
 		goto DelIndexExit;
-	iResult = iVBDelNodes (iHandle, iKeyNumber, tRootNode);
+	if (iDelNodes (iHandle, iKeyNumber, tRootNode))
+		goto DelIndexExit;
 	vVBFree (psVBFile [iHandle]->psKeydesc [iKeyNumber], sizeof (struct keydesc));
 	vVBTreeAllFree (iHandle, iKeyNumber, psVBFile [iHandle]->psTree [iKeyNumber]);
 	vVBKeyUnMalloc (iHandle, iKeyNumber);
@@ -379,11 +399,11 @@ isdelindex (int iHandle, struct keydesc *psKeydesc)
 	psVBFile [iHandle]->psKeyCurr [MAXSUBS - 1] = VBKEY_NULL;
 	psVBFile [iHandle]->iNKeys--;
 	stint (psVBFile [iHandle]->iNKeys, psVBFile [iHandle]->sDictNode.cIndexCount);
-	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
-	iVBTransDeleteIndex (iHandle, psKeydesc);
+	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
+	iResult = iVBTransDeleteIndex (iHandle, psKeydesc);
 
 DelIndexExit:
-	iVBExit (iHandle);
+	iResult |= iVBExit (iHandle);
 	return (iResult);
 }
 
@@ -407,15 +427,14 @@ iAddKeydescriptor (int iHandle, struct keydesc *psKeydesc)
 	tNewNode = tVBNodeCountGetNext (iHandle);
 	if (tNewNode == -1)
 		return (-1);
-	memset (cNode0, 0, MAX_NODE_LENGTH);
+	memset (cVBNode [0], 0, MAX_NODE_LENGTH);
 #if	_FILE_OFFSET_BITS == 64
-	stint (INTSIZE + QUADSIZE, cNode0);
-	stquad (1, cNode0 + INTSIZE);
+	stint (INTSIZE + QUADSIZE, cVBNode [0]);
+	stquad (1, cVBNode [0] + INTSIZE);
 #else	// _FILE_OFFSET_BITS == 64
-	stint (INTSIZE, cNode0);
+	stint (INTSIZE, cVBNode [0]);
 #endif	// _FILE_OFFSET_BITS == 64
-	//iserrno = iVBNodeWrite (iHandle, (void *) cNode0, tNewNode);
-	iserrno = iVBBlockWrite (iHandle, TRUE, tNewNode, cNode0);
+	iserrno = iVBBlockWrite (iHandle, TRUE, tNewNode, cVBNode [0]);
 	if (iserrno)
 		return (-1);
 	/*
@@ -428,11 +447,10 @@ iAddKeydescriptor (int iHandle, struct keydesc *psKeydesc)
 	while (tHeadNode)
 	{
 		tNodeNumber = tHeadNode;
-		//iserrno = iVBNodeRead (iHandle, (void *) cNode0, tNodeNumber);
-		iserrno = iVBBlockRead (iHandle, TRUE, tNodeNumber, cNode0);
+		iserrno = iVBBlockRead (iHandle, TRUE, tNodeNumber, cVBNode [0]);
 		if (iserrno)
 			return (-1);
-		tHeadNode = ldquad (cNode0 + INTSIZE);
+		tHeadNode = ldquad (cVBNode [0] + INTSIZE);
 	}
 	stquad (tNewNode, pcDstPtr);
 	pcDstPtr += QUADSIZE;
@@ -450,7 +468,7 @@ iAddKeydescriptor (int iHandle, struct keydesc *psKeydesc)
 		*pcDstPtr = psKeydesc->sPart [iLoop].iType;
 		pcDstPtr++;
 	}
-	iNodeUsed = ldint (cNode0);
+	iNodeUsed = ldint (cVBNode [0]);
 	iLenKeydesc = pcDstPtr - cKeydesc;
 	stint (iLenKeydesc, cKeydesc);
 	if (psVBFile [iHandle]->iNodeSize - (iNodeUsed + 4) < iLenKeydesc)
@@ -458,26 +476,23 @@ iAddKeydescriptor (int iHandle, struct keydesc *psKeydesc)
 		tNewNode = tVBNodeCountGetNext (iHandle);
 		if (tNewNode == -1)
 			return (-1);
-		memset (cNode1, 0, MAX_NODE_LENGTH);
-		stint (INTSIZE + QUADSIZE + iLenKeydesc, cNode1);
-		memcpy (cNode1 + INTSIZE + QUADSIZE, cKeydesc, iLenKeydesc);
-		//iserrno = iVBNodeWrite (iHandle, (void *) cNode0, tNewNode);
-		iserrno = iVBBlockWrite (iHandle, TRUE, tNewNode, cNode0);
+		memset (cVBNode [1], 0, MAX_NODE_LENGTH);
+		stint (INTSIZE + QUADSIZE + iLenKeydesc, cVBNode [1]);
+		memcpy (cVBNode [1] + INTSIZE + QUADSIZE, cKeydesc, iLenKeydesc);
+		iserrno = iVBBlockWrite (iHandle, TRUE, tNewNode, cVBNode [0]);
 		if (iserrno)
 			return (-1);
-		stquad (tNewNode, cNode0 + INTSIZE);
-		//iserrno = iVBNodeWrite (iHandle, (void *) cNode0, tNodeNumber);
-		iserrno = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cNode0);
+		stquad (tNewNode, cVBNode [0] + INTSIZE);
+		iserrno = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cVBNode [0]);
 		if (iserrno)
 			return (-1);
 		return (0);
 	}
-	stint (iNodeUsed + iLenKeydesc, cNode0);
+	stint (iNodeUsed + iLenKeydesc, cVBNode [0]);
 	psKeydesc->iKeyLength = iLenKeyUncomp;
 	psKeydesc->tRootNode = tNewNode;
-	memcpy (cNode0 + iNodeUsed, cKeydesc, iLenKeydesc);
-	//iserrno = iVBNodeWrite (iHandle, (void *) cNode0, tNodeNumber);
-	iserrno = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cNode0);
+	memcpy (cVBNode [0] + iNodeUsed, cKeydesc, iLenKeydesc);
+	iserrno = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cVBNode [0]);
 	if (iserrno)
 		return (-1);
 	return (0);
@@ -497,14 +512,13 @@ tDelKeydescriptor (int iHandle, struct keydesc *psKeydesc, int iKeyNumber)
 	{
 		if (!tHeadNode)
 			return (-1);
-		memset (cNode0, 0, MAX_NODE_LENGTH);
-		//iserrno = iVBNodeRead (iHandle, (void *) cNode0, tHeadNode);
-		iserrno = iVBBlockRead (iHandle, TRUE, tHeadNode, cNode0);
+		memset (cVBNode [0], 0, MAX_NODE_LENGTH);
+		iserrno = iVBBlockRead (iHandle, TRUE, tHeadNode, cVBNode [0]);
 		if (iserrno)
 			return (-1);
-		pcSrcPtr = cNode0 + INTSIZE + QUADSIZE;
-		iNodeUsed = ldint (cNode0);
-		while (pcSrcPtr - cNode0 < iNodeUsed)
+		pcSrcPtr = cVBNode [0] + INTSIZE + QUADSIZE;
+		iNodeUsed = ldint (cVBNode [0]);
+		while (pcSrcPtr - cVBNode [0] < iNodeUsed)
 		{
 			if (iLoop < iKeyNumber)
 			{
@@ -513,15 +527,187 @@ tDelKeydescriptor (int iHandle, struct keydesc *psKeydesc, int iKeyNumber)
 				continue;
 			}
 			iNodeUsed -= ldint (pcSrcPtr);
-			stint (iNodeUsed, cNode0);
-			memcpy (pcSrcPtr, pcSrcPtr + ldint (pcSrcPtr), MAX_NODE_LENGTH - (pcSrcPtr - cNode0 + ldint (pcSrcPtr)));
-			//iserrno = iVBNodeWrite (iHandle, (void *) cNode0, tHeadNode);
-			iserrno = iVBBlockWrite (iHandle, TRUE, tHeadNode, cNode0);
+			stint (iNodeUsed, cVBNode [0]);
+			memcpy (pcSrcPtr, pcSrcPtr + ldint (pcSrcPtr), MAX_NODE_LENGTH - (pcSrcPtr - cVBNode [0] + ldint (pcSrcPtr)));
+			iserrno = iVBBlockWrite (iHandle, TRUE, tHeadNode, cVBNode [0]);
 			if (iserrno)
 				return (-1);
 			return (psVBFile [iHandle]->psKeydesc [iKeyNumber]->tRootNode);
 		}
-		tHeadNode = ldquad (cNode0 + INTSIZE);
+		tHeadNode = ldquad (cVBNode [0] + INTSIZE);
 	}
 	return (-1);	// Just to keep the compiler happy :)
+}
+
+/*
+ * Name:
+ *	static	int	iDelNodes (int iHandle, int iKeyNumber, off_t tRootNode);
+ * Arguments:
+ *	int	iHandle
+ *		The open file descriptor of the VBISAM file (Not the dat file)
+ *	int	iKeyNumber
+ *		The key number being deleted
+ *	off_t	tRootNode
+ *		The root node of the index being deleted
+ * Prerequisites:
+ *	NONE
+ * Returns:
+ *	-1	Failure (iserrno contains more info)
+ *	0	Success
+ * Problems:
+ *	NONE known
+ * Comments:
+ *	ONLY used by isdelindex!
+ */
+static	int
+iDelNodes (int iHandle, int iKeyNumber, off_t tRootNode)
+{
+	char	cLclNode [MAX_NODE_LENGTH],
+		*pcSrcPtr;
+	int	iDuplicate,
+		iKeyLength,
+		iCompLength = 0,
+		iNodeUsed,
+		iResult = 0;
+	struct	keydesc
+		*psKeydesc;
+
+	psKeydesc = psVBFile [iHandle]->psKeydesc [iKeyNumber];
+	iResult = iVBBlockRead (iHandle, TRUE, tRootNode, cLclNode);
+	if (iResult)
+		return (iResult);
+	// Recurse for non-leaf nodes
+	if (*(cLclNode + psVBFile [iHandle]->iNodeSize - 2))
+	{
+		iNodeUsed = ldint (cLclNode);
+#if	_FILE_OFFSET_BITS == 64
+		pcSrcPtr = cLclNode + INTSIZE + QUADSIZE;
+#else	// _FILE_OFFSET_BITS == 64
+		pcSrcPtr = cLclNode + INTSIZE;
+#endif	// _FILE_OFFSET_BITS == 64
+		iDuplicate = FALSE;
+		while (pcSrcPtr - cLclNode < iNodeUsed)
+		{
+			if (iDuplicate)
+			{
+				if (!(*(pcSrcPtr + QUADSIZE) & 0x80))
+					iDuplicate = FALSE;
+				*(pcSrcPtr + QUADSIZE) &= ~0x80;
+				iResult = iDelNodes (iHandle, iKeyNumber, ldquad (pcSrcPtr + QUADSIZE));	// Eeek, recursion :)
+				if (iResult)
+					return (iResult);
+				pcSrcPtr += (QUADSIZE * 2);
+			}
+			iKeyLength = psKeydesc->iKeyLength;
+			if (psKeydesc->iFlags & LCOMPRESS)
+			{
+#if	_FILE_OFFSET_BITS == 64
+				iCompLength = ldint (pcSrcPtr);
+				pcSrcPtr += INTSIZE;
+				iKeyLength -= (iCompLength - 2);
+#else	// _FILE_OFFSET_BITS == 64
+				iCompLength = *(pcSrcPtr);
+				pcSrcPtr++;
+				iKeyLength -= (iCompLength - 1);
+#endif	// _FILE_OFFSET_BITS == 64
+			}
+			if (psKeydesc->iFlags & TCOMPRESS)
+			{
+#if	_FILE_OFFSET_BITS == 64
+				iCompLength = ldint (pcSrcPtr);
+				pcSrcPtr += INTSIZE;
+				iKeyLength -= (iCompLength - 2);
+#else	// _FILE_OFFSET_BITS == 64
+				iCompLength = *pcSrcPtr;
+				pcSrcPtr++;
+				iKeyLength -= (iCompLength - 1);
+#endif	// _FILE_OFFSET_BITS == 64
+			}
+			pcSrcPtr += iKeyLength;
+			if (psKeydesc->iFlags & ISDUPS)
+			{
+				pcSrcPtr += QUADSIZE;
+				if (*pcSrcPtr & 0x80)
+					iDuplicate = TRUE;
+			}
+			iResult = iDelNodes (iHandle, iKeyNumber, ldquad (pcSrcPtr));	// Eeek, recursion :)
+			if (iResult)
+				return (iResult);
+			pcSrcPtr += QUADSIZE;
+		}
+	}
+	iResult = iVBNodeFree (iHandle, tRootNode);
+	return (iResult);
+}
+
+/*
+ * Name:
+ *	static	int	iMakeKeysFromData (int iHandle, int iKeyNumber);
+ * Arguments:
+ *	int	iHandle
+ *		The open file descriptor of the VBISAM file (Not the dat file)
+ *	int	iKeyNumber
+ *		The absolute key number within the index file (0-n)
+ * Prerequisites:
+ *	NONE
+ * Returns:
+ *	-1	Failure (iserrno contains more info)
+ *	0	Success
+ * Problems:
+ *	NONE known
+ * Comments:
+ *	Reads in EVERY data row and creates a key entry for it
+ */
+static	int
+iMakeKeysFromData (int iHandle, int iKeyNumber)
+{
+	char	cKeyValue [VB_MAX_KEYLEN];
+	int	iDeleted,
+		iResult;
+	struct	VBKEY
+		*psKey;
+	off_t	tDupNumber,
+		tLoop;
+
+	// Don't have to insert if the key is a NULL key!
+	if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iNParts == 0)
+		return (0);
+
+	for (tLoop = 1; tLoop < ldquad (psVBFile [iHandle]->sDictNode.cDataCount); tLoop++)
+	{	
+		/*
+		 * Step 1:
+		 *	Read in the existing data row (Just the min rowlength)
+		 */
+		iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tLoop, FALSE);
+		if (iserrno)
+			return (-1);
+		if (iDeleted)
+			continue;
+		/*
+		 * Step 2:
+		 *	Check the index for a potential ISNODUPS error (EDUPL)
+		 *	Also, calculate the duplicate number as needed
+		 */
+		vVBMakeKey (iHandle, iKeyNumber, *(psVBFile [iHandle]->ppcRowBuffer), cKeyValue);
+		iResult = iVBKeySearch (iHandle, ISGREAT, iKeyNumber, 0, cKeyValue, 0);
+		tDupNumber = 0;
+		if (iResult >= 0 && !iVBKeyLoad (iHandle, iKeyNumber, ISPREV, FALSE, &psKey) && !memcmp (psKey->cKey, cKeyValue, psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength))
+		{
+			iserrno = EDUPL;
+			if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iFlags & ISDUPS)
+				tDupNumber = psKey->tDupNumber + 1;
+			else
+				return (-1);
+		}
+
+		/*
+		 * Step 3:
+		 * Perform the actual insertion into the index
+		 */
+		iResult = iVBKeyInsert (iHandle, VBTREE_NULL, iKeyNumber, cKeyValue, tLoop, tDupNumber, VBTREE_NULL);
+		if (iResult)
+			return (iResult);
+	}
+	return (0);
 }

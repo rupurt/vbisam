@@ -8,9 +8,12 @@
  *	This is the header that defines the internally used structures for the
  *	VBISAM library.
  * Version:
- *	$Id: isinternal.h,v 1.7 2004/03/23 21:55:56 trev_vb Exp $
+ *	$Id: isinternal.h,v 1.8 2004/06/06 20:52:21 trev_vb Exp $
  * Modification History:
  *	$Log: isinternal.h,v $
+ *	Revision 1.8  2004/06/06 20:52:21  trev_vb
+ *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
+ *	
  *	Revision 1.7  2004/03/23 21:55:56  trev_vb
  *	TvB 23Mar2004 Endian on SPARC (Phase I).  Makefile changes for SPARC.
  *	
@@ -48,15 +51,12 @@
 #define	VBISAM_LIB
 #include	"vbisam.h"
 
-#ifdef	FALSE
-#undef	FALSE
-#endif
-#define	FALSE	(0)
-
-#ifdef	TRUE
-#undef	TRUE
-#endif
-#define	TRUE	((!FALSE))
+// If your operating system is POOR on caching data, I can do it for you.
+// This is also useful if the data is remotely located (e.g. NFS) since it
+//  suppresses re-reading and writing wherever possible
+#define	VB_CACHE_ON	1
+#define	VB_CACHE_OFF	2
+#define	VB_CACHE	VB_CACHE_OFF
 
 #ifdef	VB_ENDIAN
 #undef	VB_ENDIAN
@@ -68,45 +68,55 @@
 #define	VB_ENDIAN	4321
 #endif
 #ifndef	VB_ENDIAN
-Error! I do not know whether the CPU is big or little endian! HELP me!
+#Endian-Error I do not know whether the CPU is big or little endian! HELP me!
 #endif
 
 // Implementation limits
-// DEV versions have a fixed maximum node length of 256 bytes
 // 64-bit versions have a maximum node length of 4096 bytes
 // 32-bit versions have a maximum node length of 1024 bytes
-#ifdef	DEV
-#define	MAX_NODE_LENGTH	256
-#else	// DEV
-# if	_FILE_OFFSET_BITS == 64
-#  define	MAX_NODE_LENGTH	4096
-# else	// _FILE_OFFSET_BITS == 64
-#  define	MAX_NODE_LENGTH	1024
-# endif	// _FILE_OFFSET_BITS == 64
-#endif	// DEV
+#if	_FILE_OFFSET_BITS == 64
+# define	MAX_NODE_LENGTH	4096
+# define	MAX_KEYS_PER_NODE	((MAX_NODE_LENGTH - (INTSIZE + QUADSIZE + 2)) / (QUADSIZE + 1))
+#else	// _FILE_OFFSET_BITS == 64
+# define	MAX_NODE_LENGTH	1024
+# define	MAX_KEYS_PER_NODE	((MAX_NODE_LENGTH - (INTSIZE + 2)) / (QUADSIZE + 1))
+#endif	// _FILE_OFFSET_BITS == 64
 #define	SLOTS_PER_NODE	((MAX_NODE_LENGTH >> 2) - 1)	// Used in vbVarlenIO.c
 
-#define	MAX_KEYS_PER_NODE	((MAX_NODE_LENGTH - (4 + (INTSIZE * 2) + QUADSIZE)) / ((INTSIZE * 2) + 2 + (QUADSIZE * 2)))
 #define	MAX_PATH_LENGTH	128
+#define	MAX_OPEN_TRANS	1024	// Currently, only used in isrecover ()
+
+#ifdef	FALSE
+#undef	FALSE
+#endif
+#define	FALSE	(0)
+
+#ifdef	TRUE
+#undef	TRUE
+#endif
+#define	TRUE	((!FALSE))
 
 // Arguments to iVBLock
-#define	VBUNLOCK	0
-#define	VBRDLOCK	1
-#define	VBRDLCKW	2
-#define	VBWRLOCK	3
-#define	VBWRLCKW	4
+#define	VBUNLOCK	0	// Take a WILD guess!
+#define	VBRDLOCK	1	// A simple read lock, non-blocking
+#define	VBRDLCKW	2	// A simple read lock, blocking
+#define	VBWRLOCK	3	// An exclusive write lock, non-blocking
+#define	VBWRLCKW	4	// An exclusive write lock, blocking
 
 // Values for iVBInTrans
-#define	VBNOTRANS	0
-#define	VBBEGIN		1
-#define	VBNEEDFLUSH	2
-#define	VBROLLBACK	3
-#define	VBRECOVER	4
+#define	VBNOTRANS	0	// NOT in a transaction at all
+#define	VBBEGIN		1	// An isbegin has been issued but no more
+#define	VBNEEDFLUSH	2	// Something BEYOND just isbegin has been issued
+#define	VBCOMMIT	3	// We're in 'iscommit' mode
+#define	VBROLLBACK	4	// We're in 'isrollback' mode
+#define	VBRECOVER	5	// We're in 'isrecover' mode
 
 #ifdef	VBISAMMAIN
 #define	EXTERN
 	char	*pcRowBuffer = (char *) 0,
-		*pcWriteBuffer;		// Common areas for a data row
+		*pcWriteBuffer,		// Common areas for a data row
+		cVBNode [2][MAX_NODE_LENGTH],	// Scratch nodes
+		cVBTransBuffer [65536];	// Buffer for holding a transaction
 	int	iVBMaxUsedHandle = -1,	// The highest opened file handle
 		iVBLogfileHandle = -1,	// The handle to the current logfile
 		iVBInTrans = VBNOTRANS,	// If not zero, we're in a transaction
@@ -115,7 +125,9 @@ Error! I do not know whether the CPU is big or little endian! HELP me!
 #else	// VBISAMMAIN
 #define	EXTERN	extern
 extern	char	*pcRowBuffer,
-		*pcWriteBuffer;		// Common areas for a data row
+		*pcWriteBuffer,		// Common areas for a data row
+		cVBNode [2][MAX_NODE_LENGTH],	// Scratch nodes
+		cVBTransBuffer [65536];	// Buffer for holding a transaction
 extern	int	iVBMaxUsedHandle,
 		iVBLogfileHandle,
 		iVBInTrans,
@@ -167,6 +179,11 @@ struct	VBTREE
 		*psNext,		// Used for the free list only!
 		*psParent;		// The next level up from this node
 	struct	VBKEY
+#if	_FILE_OFFSET_BITS == 64		// Highly non-portable.. kind of
+		*psKeyList [512],
+#else	// _FILE_OFFSET_BITS == 64
+		*psKeyList [256],
+#endif	// _FILE_OFFSET_BITS == 64
 		*psKeyFirst,		// Pointer to the FIRST key in this node
 		*psKeyLast,		// Pointer to the LAST key in this node
 		*psKeyCurr;		// Pointer to the CURRENT key
@@ -176,10 +193,11 @@ struct	VBTREE
 	{
 		unsigned int
 			iLevel:16,	// The level number (0 = LEAF)
-			iIsRoot:2,	// 1 = This is the ROOT node
-			iIsTOF:2,	// 1 = First entry in index
-			iIsEOF:2,	// 1 = Last entry in index
-			iRFU:10;	// Reserved for Future Use
+			iIsRoot:1,	// 1 = This is the ROOT node
+			iIsTOF:1,	// 1 = First entry in index
+			iIsEOF:1,	// 1 = Last entry in index
+			iKeysInNode:10,	// # keys in psKeyList
+			iRFU:3;		// Reserved for Future Use
 	} sFlags;
 };
 #define	VBTREE_NULL	((struct VBTREE *) 0)
@@ -234,6 +252,11 @@ struct	DICTINFO
 		iMaxRowLength;	// Maximum data row length
 	int	iDataHandle,	// open () file descriptor of the .dat file
 		iIndexHandle,	// open () file descriptor of the .key file
+		iIsOpen,	// 0: Table open, Files open, Buffers OK
+				// 1: Table closed, Files open, Buffers OK
+				//	Used to retain locks
+				// 2: Table closed, Files closed, Buffers OK
+				//	Basically, just caching
 		iOpenMode,	// The type of open which was used
 		iVarlenLength,	// Length of varlen component
 		iVarlenSlot;	// The slot number within tVarlenNode
@@ -264,23 +287,56 @@ struct	DICTINFO
 	unsigned int
 		iIsDisjoint:1,	// If set, CURR & NEXT give same result
 		iIsDataLocked:1,// If set, islock() is active
-		iIsDictLocked:2,// Relates to sDictNode below
-				// 	0: Content on file MIGHT be different
-				// 	1: Content on file is EQUAL
-				// 	2: sDictNode needs to be rewritten
+		iIsDictLocked:3,// Relates to sDictNode below
+				// 	0x00: Content on file MIGHT be different
+				// 	0x01: Dictionary node is LOCKED
+				// 	0x02: sDictNode needs to be rewritten
+				//	0x04: do NOT increment Dict.Trans
+				//		isrollback () is in progress
+				//	(Thus, suppress some iVBEnter/iVBExit)
 		iIndexChanged:2,// Various
 				//	0: Index has NOT changed since last time
 				//	1: Index has changed, blocks invalid
 				//	2: Index has changed, blocks are valid
-		iTransYet:1,	// Relates to isbegin () et al
-				//	0: No transactions yet
-				//	1: Guess!
-		iRFU:25;
+		iTransYet:2,	// Relates to isbegin () et al
+				//	0: FO Trans not yet written
+				//	1: FO Trans written outside isbegin
+				//	2: FO Trans written within isbegin
+		iRFU:23;
 	} sFlags;
 };
 EXTERN	struct	DICTINFO
 	*psVBFile [VB_MAX_FILES + 1];
 // If the corresponding handle is not open, psVBFile [iHandle] == NULL
+
+#define	VBL_BUILD	("BU")
+#define	VBL_BEGIN	("BW")
+#define	VBL_CREINDEX	("CI")
+#define	VBL_CLUSTER	("CL")
+#define	VBL_COMMIT	("CW")
+#define	VBL_DELETE	("DE")
+#define	VBL_DELINDEX	("DI")
+#define	VBL_FILEERASE	("ER")
+#define	VBL_FILECLOSE	("FC")
+#define	VBL_FILEOPEN	("FO")
+#define	VBL_INSERT	("IN")
+#define	VBL_RENAME	("RE")
+#define	VBL_ROLLBACK	("RW")
+#define	VBL_SETUNIQUE	("SU")
+#define	VBL_UNIQUEID	("UN")
+#define	VBL_UPDATE	("UP")
+
+struct	SLOGHDR
+{
+	char	cLength [INTSIZE],
+		cOperation [2],
+		cPID [INTSIZE],
+		cUID [INTSIZE],
+		cTime [LONGSIZE],
+		cRFU1 [INTSIZE],
+		cLastPosn [INTSIZE],
+		cLastLength [INTSIZE];
+} *psVBLogHeader;
 
 // Globally defined function prototypes
 // isHelper.c
@@ -326,12 +382,17 @@ int	isdelrec (int, off_t);
 // isopen.c
 int	iscleanup (void);
 int	isclose (int);
+int	iVBClose2 (int);
 int	isindexinfo (int, struct keydesc *, int);
 int	isopen (char *, int);
 
 // isread.c
 int	isread (int, char *, int);
 int	isstart (int, struct keydesc *, int, char *, int);
+int	iVBCheckKey (int, struct keydesc *, int, int, int);
+
+// isrecover.c
+int	isrecover (void);
 
 // isrewrite.c
 int	isrewrite (int, char *);
@@ -343,9 +404,10 @@ int	isbegin (void);
 int	iscommit (void);
 int	islogclose (void);
 int	islogopen (char *);
-int	isrecover (void);
 int	isrollback (void);
-int	iVBTransBuild (char *, int, int, struct keydesc *);
+int	iVBRollMeBack (off_t, int, int);
+int	iVBRollMeForward (off_t, int);
+int	iVBTransBuild (char *, int, int, struct keydesc *, int);
 int	iVBTransCreateIndex (int, struct keydesc *);
 int	iVBTransCluster (void);	// BUG - Unknown args
 int	iVBTransDelete (int, off_t, int);
@@ -364,13 +426,18 @@ int	iswrcurr (int, char *);
 int	iswrite (int, char *);
 int	iVBWriteRow (int, char *, off_t);
 
+// vbBlockIO.c
+int	iVBBlockRead (int, int, off_t, char *);
+int	iVBBlockWrite (int, int, off_t, char *);
+int	iVBBlockFlush (int);
+void	vVBBlockInvalidate (int);
+void	vVBBlockDeinit (void);
+
 // vbDataIO.c
 int	iVBDataRead (int, void *, int *, off_t, int);
 int	iVBDataWrite (int, void *, int, off_t, int);
 
 // vbIndexIO.c
-int	iVBNodeRead (int, void *, off_t);
-int	iVBNodeWrite (int, void *, off_t);
 int	iVBUniqueIDSet (int, off_t);
 off_t	tVBUniqueIDGetNext (int);
 off_t	tVBNodeCountGetNext (int);
@@ -379,18 +446,17 @@ int	iVBNodeFree (int, off_t);
 int	iVBDataFree (int, off_t);
 off_t	tVBNodeAllocate (int);
 off_t	tVBDataAllocate (int iHandle);
+int	iVBForceDataAllocate (int iHandle, off_t tRowNumber);
 
 // vbKeysIO.c
-int	iVBCheckKey (int, struct keydesc *, int, int, int);
-int	iVBRowInsert (int, char *, off_t);
-int	iVBRowDelete (int, off_t);
-int	iVBRowUpdate (int, char *, off_t);
 void	vVBMakeKey (int, int, char *, char *);
 int	iVBKeySearch (int, int, int, int, char *, off_t);
 int	iVBKeyLocateRow (int, int, off_t);
 int	iVBKeyLoad (int, int, int, int, struct VBKEY **);
-int	iVBMakeKeysFromData (int, int);
-int	iVBDelNodes (int, int, off_t);
+void	vVBKeyValueSet (int, struct keydesc *, char *);
+int	iVBKeyInsert (int, struct VBTREE *, int, char *, off_t, off_t, struct VBTREE *);
+int	iVBKeyDelete (int, int);
+int	iVBKeyCompare (int, int, int, unsigned char *, unsigned char *);
 #ifdef	DEBUG
 void	vDumpKey (struct VBKEY *, struct VBTREE *, int);
 void	vDumpTree (struct VBTREE *, int);
@@ -414,11 +480,6 @@ int	iVBLock (int, off_t, off_t, int);
 int	iVBLink (char *, char *);
 int	iVBUnlink (char *);
 int	iVBAccess (char *, int);
-void	vVBBlockDeinit (void);
-void	vVBBlockInvalidate (int);
-int	iVBBlockRead (int, int, off_t, char *);
-int	iVBBlockWrite (int, int, off_t, char *);
-int	iVBBlockFlush (int);
 
 // vbMemIO.c
 struct	VBLOCK *psVBLockAllocate (int);
@@ -435,6 +496,10 @@ void	vVBUnMalloc (void);
 #ifdef	DEBUG
 void	vVBMallocReport (void);
 #endif	// DEBUG
+
+// vbNodeMemIO.c
+int	iVBNodeLoad (int, int, struct VBTREE *, off_t, int);
+int	iVBNodeSave (int, int, struct VBTREE *, off_t);
 
 // vbVarLenIO.c
 int	iVBVarlenRead (int, char *, off_t, int, int);

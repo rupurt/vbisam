@@ -8,14 +8,11 @@
  *	This module handles the locking on both the index and data files for the
  *	VBISAM library.
  * Version:
- *	$Id: vbLocking.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
+ *	$Id: vbLocking.c,v 1.6 2004/06/06 20:52:21 trev_vb Exp $
  * Modification History:
  *	$Log: vbLocking.c,v $
- *	Revision 1.5  2004/01/06 14:31:59  trev_vb
- *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
- *	
- *	Revision 1.4  2004/01/05 07:36:17  trev_vb
- *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
+ *	Revision 1.6  2004/06/06 20:52:21  trev_vb
+ *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
  *	
  *	Revision 1.3  2004/01/03 02:28:48  trev_vb
  *	TvB 02Jan2004 WAY too many changes to enumerate!
@@ -31,7 +28,6 @@
  */
 #include	"isinternal.h"
 
-static	char	cNode0 [MAX_NODE_LENGTH];
 static	int	iVBBufferLevel = -1;
 
 /*
@@ -103,7 +99,8 @@ iVBEnter (int iHandle, int iModifying)
 		iResult;
 	off_t	tLength;
 
-	if (!psVBFile [iHandle])
+	iserrno = 0;
+	if (!psVBFile [iHandle] || (psVBFile [iHandle]->iIsOpen && iVBInTrans != VBCOMMIT && iVBInTrans != VBROLLBACK))
 	{
 		iserrno = ENOTOPEN;
 		return (-1);
@@ -111,7 +108,7 @@ iVBEnter (int iHandle, int iModifying)
 	psVBFile [iHandle]->sFlags.iIndexChanged = 0;
 	if ((psVBFile [iHandle]->iOpenMode & ISEXCLLOCK))
 		return (0);
-	if (psVBFile [iHandle]->sFlags.iIsDictLocked)
+	if (psVBFile [iHandle]->sFlags.iIsDictLocked & 0x03)
 	{
 		iserrno = EBADARG;
 		return (-1);
@@ -120,17 +117,16 @@ iVBEnter (int iHandle, int iModifying)
 		iLockMode = VBWRLCKW;
 	else
 		iLockMode = VBRDLCKW;
-	memset (cNode0, 0xff, QUADSIZE);
-	cNode0 [0] = 0x3f;
-	tLength = ldquad (cNode0);
+	memset (cVBNode [0], 0xff, QUADSIZE);
+	cVBNode [0] [0] = 0x3f;
+	tLength = ldquad (cVBNode [0]);
 	if (!(psVBFile [iHandle]->iOpenMode & ISEXCLLOCK))
 	{
 		iResult = iVBLock (psVBFile [iHandle]->iIndexHandle, 0, tLength, iLockMode);
 		if (iResult)
 			return (-1);
-		psVBFile [iHandle]->sFlags.iIsDictLocked = 1;
-		//iResult = iVBNodeRead (iHandle, (void *) cNode0, 1);
-		iResult = iVBBlockRead (iHandle, TRUE, (off_t) 1, cNode0);
+		psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x01;
+		iResult = iVBBlockRead (iHandle, TRUE, (off_t) 1, cVBNode [0]);
 		if (iResult)
 		{
 			psVBFile [iHandle]->sFlags.iIsDictLocked = 0;
@@ -138,13 +134,16 @@ iVBEnter (int iHandle, int iModifying)
 			iserrno = EBADFILE;
 			return (-1);
 		}
-		memcpy ((void *) &psVBFile [iHandle]->sDictNode, (void *) cNode0, sizeof (struct DICTNODE));
+		memcpy ((void *) &psVBFile [iHandle]->sDictNode, (void *) cVBNode [0], sizeof (struct DICTNODE));
 	}
-	psVBFile [iHandle]->sFlags.iIsDictLocked = 1;
+	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x01;
 	if (psVBFile [iHandle]->tTransLast == ldquad (psVBFile [iHandle]->sDictNode.cTransNumber))
 		psVBFile [iHandle]->sFlags.iIndexChanged = 0;
 	else
+	{
 		psVBFile [iHandle]->sFlags.iIndexChanged = 1;
+		vVBBlockInvalidate (iHandle);
+	}
 	return (0);
 }
 
@@ -169,7 +168,7 @@ int
 iVBExit (int iHandle)
 {
 	char	*pcEnviron;
-	int	iResult,
+	int	iResult = 0,
 		iLoop,
 		iLoop2,
 		iSaveError;
@@ -184,30 +183,28 @@ iVBExit (int iHandle)
 	}
 	tTransNumber = ldquad (psVBFile [iHandle]->sDictNode.cTransNumber);
 	psVBFile [iHandle]->tTransLast = tTransNumber;
-	if (psVBFile [iHandle]->sFlags.iIsDictLocked == 2)
-	{
-		psVBFile [iHandle]->tTransLast = tTransNumber + 1;
-		stquad (tTransNumber + 1, psVBFile [iHandle]->sDictNode.cTransNumber);
-		psVBFile [iHandle]->tTransLast = tTransNumber + 1;
-	}
 	if (psVBFile [iHandle]->iOpenMode & ISEXCLLOCK)
 		return (0);
-	if (psVBFile [iHandle]->sFlags.iIsDictLocked >= 2)
+	if (psVBFile [iHandle]->sFlags.iIsDictLocked & 0x02)
 	{
-		memset (cNode0, 0, MAX_NODE_LENGTH);
-		memcpy ((void *) cNode0, (void *) &psVBFile [iHandle]->sDictNode, sizeof (struct DICTNODE));
-		//iResult = iVBNodeWrite (iHandle, (void *) cNode0, 1);
-		iResult = iVBBlockWrite (iHandle, TRUE, (off_t) 1, cNode0);
+		if (!(psVBFile [iHandle]->sFlags.iIsDictLocked & 0x04))
+		{
+			psVBFile [iHandle]->tTransLast = tTransNumber + 1;
+			stquad (tTransNumber + 1, psVBFile [iHandle]->sDictNode.cTransNumber);
+		}
+		memset (cVBNode [0], 0, MAX_NODE_LENGTH);
+		memcpy ((void *) cVBNode [0], (void *) &psVBFile [iHandle]->sDictNode, sizeof (struct DICTNODE));
+		iResult = iVBBlockWrite (iHandle, TRUE, (off_t) 1, cVBNode [0]);
 		if (iResult)
 			iserrno = EBADFILE;
 		else
 			iserrno = 0;
 	}
-	memset (cNode0, 0xff, QUADSIZE);
-	cNode0 [0] = 0x3f;
-	tLength = ldquad (cNode0);
-	iResult = iVBLock (psVBFile [iHandle]->iIndexHandle, 0, tLength, VBUNLOCK);
-	if (iResult)
+	iResult |= iVBBlockFlush (iHandle);
+	memset (cVBNode [0], 0xff, QUADSIZE);
+	cVBNode [0] [0] = 0x3f;
+	tLength = ldquad (cVBNode [0]);
+	if (iVBLock (psVBFile [iHandle]->iIndexHandle, 0, tLength, VBUNLOCK))
 	{
 		iserrno = errno;
 		return (-1);
@@ -222,7 +219,6 @@ iVBExit (int iHandle)
 		else
 			iVBBufferLevel = 4;
 	}
-	iVBBlockFlush (iHandle);
 	for (iLoop2 = 0; iLoop2 < psVBFile [iHandle]->iNKeys; iLoop2++)
 	{
 		struct	VBKEY
@@ -263,6 +259,8 @@ iVBExit (int iHandle)
 				psKey = VBKEY_NULL;
 		}
 	}
+	if (iResult)
+		return (-1);
 	iserrno = iSaveError;
 	return (0);
 }
@@ -284,24 +282,22 @@ iVBExit (int iHandle)
 int
 iVBForceExit (int iHandle)
 {
-	int	iResult;
-	//off_t	tTransNumber;
+	int	iResult = 0;
 
-	if (psVBFile [iHandle]->sFlags.iIsDictLocked == 2)
+	if (psVBFile [iHandle]->sFlags.iIsDictLocked & 0x02)
 	{
-		//tTransNumber = ldquad (psVBFile [iHandle]->sDictNode.cTransNumber) + 1;
-		//stquad (tTransNumber, psVBFile [iHandle]->sDictNode.cTransNumber);
-		memset (cNode0, 0, MAX_NODE_LENGTH);
-		memcpy ((void *) cNode0, (void *) &psVBFile [iHandle]->sDictNode, sizeof (struct DICTNODE));
-		//iResult = iVBNodeWrite (iHandle, (void *) cNode0, 1);
-		iResult = iVBBlockWrite (iHandle, TRUE, (off_t) 1, cNode0);
+		memset (cVBNode [0], 0, MAX_NODE_LENGTH);
+		memcpy ((void *) cVBNode [0], (void *) &psVBFile [iHandle]->sDictNode, sizeof (struct DICTNODE));
+		iResult = iVBBlockWrite (iHandle, TRUE, (off_t) 1, cVBNode [0]);
 		if (iResult)
 			iserrno = EBADFILE;
 		else
 			iserrno = 0;
 	}
-	iVBBlockFlush (iHandle);
+	iResult |= iVBBlockFlush (iHandle);
 	psVBFile [iHandle]->sFlags.iIsDictLocked = 0;
+	if (iResult)
+		return (-1);
 	return (0);
 }
 
@@ -340,9 +336,9 @@ iVBFileOpenLock (int iHandle, int iMode)
 	if (!psVBFile [iHandle])
 		return (ENOTOPEN);
 
-	memset (cNode0, 0xff, QUADSIZE);
-	cNode0 [0] = 0x7f;
-	tOffset = ldquad (cNode0);
+	memset (cVBNode [0], 0xff, QUADSIZE);
+	cVBNode [0] [0] = 0x7f;
+	tOffset = ldquad (cVBNode [0]);
 
 	switch (iMode)
 	{
@@ -356,8 +352,8 @@ iVBFileOpenLock (int iHandle, int iMode)
 
 	case	2:
 		iLockType = VBWRLOCK;
-		iResult = iVBBlockRead (iHandle, TRUE, (off_t) 1, cNode0);
-		memcpy ((void *) &psVBFile [iHandle]->sDictNode, (void *) cNode0, sizeof (struct DICTNODE));
+		iResult = iVBBlockRead (iHandle, TRUE, (off_t) 1, cVBNode [0]);
+		memcpy ((void *) &psVBFile [iHandle]->sDictNode, (void *) cVBNode [0], sizeof (struct DICTNODE));
 		break;
 
 	default:
@@ -365,7 +361,7 @@ iVBFileOpenLock (int iHandle, int iMode)
 	}
 
 	// Whether we're locking *OR* unlocking a region, retry forever on EINTR
-	// This *MAY* be a potential race condition?
+	// BUG? - This *MAY* be a potential race condition?
 	do
 	{
 		iResult = iVBLock (psVBFile [iHandle]->iIndexHandle, tOffset, 1, iLockType);
@@ -397,7 +393,7 @@ iVBFileOpenLock (int iHandle, int iMode)
  *	0	Success
  *	ENOTOPEN
  *	EBADFILE
- *	EFLOCKED
+ *	ELOCKED
  * Problems:
  *	NONE known
  */
@@ -420,21 +416,20 @@ iVBDataLock (int iHandle, int iMode, off_t tRowNumber, int iIsTransaction)
 	/*
 	 * If this is a FILE lock (row = 0), then we may as well free up any
 	 * other existing locks.
-	 * If some of those locks were within a transaction then TOUGH!
+	 * BUG: What if some of those locks were within a transaction?
 	 */
 	if (tRowNumber == 0)
 	{
-		psLock = psVBFile [iHandle]->psLockHead;
-		while (psLock)
+		while (psVBFile [iHandle]->psLockHead)
 		{
-			psVBFile [iHandle]->psLockHead = psLock->psNext;
-			vVBLockFree (psLock);
-			psLock = psVBFile [iHandle]->psLockHead;
+			psLock = psVBFile [iHandle]->psLockHead->psNext;
+			vVBLockFree (psVBFile [iHandle]->psLockHead);
+			psVBFile [iHandle]->psLockHead = psLock;
 		}
 		psVBFile [iHandle]->psLockTail = psVBFile [iHandle]->psLockHead;
-		memset (cNode0, 0xff, QUADSIZE);
-		cNode0 [0] = 0x3f;
-		tLength = ldquad (cNode0);
+		memset (cVBNode [0], 0xff, QUADSIZE);
+		cVBNode [0] [0] = 0x3f;
+		tLength = ldquad (cVBNode [0]);
 		if (iMode == VBUNLOCK)
 			psVBFile [iHandle]->sFlags.iIsDataLocked = FALSE;
 		else
@@ -444,12 +439,12 @@ iVBDataLock (int iHandle, int iMode, off_t tRowNumber, int iIsTransaction)
 	 * A one byte row lock can be merged with previous / next row locks
 	 * in the kernel in order to save on consuming valuable system locks
 	 */
-	memset (cNode0, 0x00, QUADSIZE);
-	cNode0 [0] = 0x40;
-	tOffset = ldquad (cNode0);
+	memset (cVBNode [0], 0x00, QUADSIZE);
+	cVBNode [0] [0] = 0x40;
+	tOffset = ldquad (cVBNode [0]);
 	iResult = iVBLock (psVBFile [iHandle]->iIndexHandle, tOffset + tRowNumber, tLength, iMode);
 	if (iResult != 0)
-		return (EBADFILE);
+		return (ELOCKED);
 	if (iMode != VBUNLOCK && tRowNumber)
 		return (iVBLockInsert (iHandle, tRowNumber, iIsTransaction));
 	if (iMode == VBUNLOCK && tRowNumber)
@@ -481,7 +476,7 @@ iVBLockInsert (int iHandle, off_t tRowNumber, int iIsTransaction)
 {
 	struct	VBLOCK
 		*psNewLock = VBLOCK_NULL,
-		*psLock = VBLOCK_NULL;
+		*psLock;
 
 	psLock = psVBFile [iHandle]->psLockHead;
 	// Insertion at head of list
@@ -533,11 +528,12 @@ iVBLockInsert (int iHandle, off_t tRowNumber, int iIsTransaction)
 		}
 		psLock = psLock->psNext;
 	}
+	if (psLock->iIsTransaction == iIsTransaction && psLock->tRowNumber == tRowNumber)
+		return (0);
 	if (!psNewLock)
 		psNewLock = psVBLockAllocate (iHandle);
 	if (psNewLock == VBLOCK_NULL)
 		return (errno);
-	psNewLock->psNext = VBLOCK_NULL;
 	psNewLock->iIsTransaction = iIsTransaction;
 	psNewLock->tRowNumber = tRowNumber;
 	// Insert psNewLock AFTER psLock

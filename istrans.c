@@ -8,9 +8,12 @@
  *	This is the module that deals with all the transaction processing for
  *	a file in the VBISAM library.
  * Version:
- *	$Id: istrans.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
+ *	$Id: istrans.c,v 1.6 2004/06/06 20:52:21 trev_vb Exp $
  * Modification History:
  *	$Log: istrans.c,v $
+ *	Revision 1.6  2004/06/06 20:52:21  trev_vb
+ *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
+ *	
  *	Revision 1.5  2004/01/06 14:31:59  trev_vb
  *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
  *	
@@ -38,9 +41,10 @@ int	isbegin (void);
 int	iscommit (void);
 int	islogclose (void);
 int	islogopen (char *);
-int	isrecover (void);
 int	isrollback (void);
-int	iVBTransBuild (char *, int, int, struct keydesc *);
+int	iVBRollMeBack (off_t, int, int);
+int	iVBRollMeForward (off_t, int);
+int	iVBTransBuild (char *, int, int, struct keydesc *, int);
 int	iVBTransCreateIndex (int, struct keydesc *);
 int	iVBTransCluster (void);	// BUG - Unknown args
 int	iVBTransDelete (int, off_t, int);
@@ -57,38 +61,6 @@ static	void	vTransHdr (char *);
 static	int	iWriteTrans (int, int);
 static	int	iWriteBegin (void);
 static	int	iDemoteLocks (void);
-static	int	iRollMeBack (off_t);
-static	int	iRollMeForward (off_t);
-
-#define	VBL_BUILD	("BU")
-#define	VBL_BEGIN	("BW")
-#define	VBL_CREINDEX	("CI")
-#define	VBL_CLUSTER	("CL")
-#define	VBL_COMMIT	("CW")
-#define	VBL_DELETE	("DE")
-#define	VBL_DELINDEX	("DI")
-#define	VBL_FILEERASE	("ER")
-#define	VBL_FILECLOSE	("FC")
-#define	VBL_FILEOPEN	("FO")
-#define	VBL_INSERT	("IN")
-#define	VBL_RENAME	("RE")
-#define	VBL_ROLLBACK	("RW")
-#define	VBL_SETUNIQUE	("SU")
-#define	VBL_UNIQUEID	("UN")
-#define	VBL_UPDATE	("UP")
-
-char	cTransBuffer [65535];	// BUG - What about LONGER rows on isrewrite?
-struct	SLOGHDR
-{
-	char	cLength [INTSIZE],
-		cOperation [2],
-		cPID [INTSIZE],
-		cUID [INTSIZE],
-		cTime [LONGSIZE],
-		cRFU1 [INTSIZE],
-		cLastPosn [INTSIZE],
-		cLastLength [INTSIZE];
-} *psLogHeader;
 
 /*
  * Name:
@@ -132,9 +104,12 @@ int	isbegin (void)
  */
 int	iscommit (void)
 {
-	int	iHoldStatus = iVBInTrans;
+	int	iHoldStatus = iVBInTrans,
+		iLoop,
+		iResult = 0;
 	off_t	tOffset;
 
+	iserrno = 0;
 	if (iVBLogfileHandle == -1)
 		return (0);
 	if (!iVBInTrans)
@@ -142,18 +117,29 @@ int	iscommit (void)
 		iserrno = ENOBEGIN;
 		return (-1);
 	}
-	iVBInTrans = VBNOTRANS;
+	iVBInTrans = VBCOMMIT;
+	if (iHoldStatus != VBBEGIN)
+	{
+		tOffset = tVBLseek (iVBLogfileHandle, 0, SEEK_END);
+		iserrno = iVBRollMeForward (tOffset, tVBPID);
+	}
+	for (iLoop = 0; iLoop <= iVBMaxUsedHandle; iLoop++)
+		if (psVBFile [iLoop] && psVBFile [iLoop]->iIsOpen == 1)
+		{
+			iResult = iserrno;
+			if (!iVBClose2 (iLoop))
+				iserrno = iResult;
+		}
 	// Don't write out a 'null' transaction!
-	if (iHoldStatus == VBBEGIN)
-		return (0);
-	tOffset = tVBLseek (iVBLogfileHandle, 0, SEEK_END);
-	// Write out the log entry
-	vTransHdr (VBL_COMMIT);
-	iserrno = iWriteTrans (0, TRUE);
-	if (!iserrno)
-		iserrno = iRollMeForward (tOffset);
-	iDemoteLocks ();
-	iVBInTrans = 0;
+	if (iHoldStatus != VBBEGIN)
+	{
+		vTransHdr (VBL_COMMIT);
+		iResult = iWriteTrans (0, TRUE);
+		if (iResult)
+			iserrno = iResult;
+		iDemoteLocks ();
+	}
+	iVBInTrans = VBNOTRANS;
 	if (iserrno)
 		return (-1);
 	return (0);
@@ -174,13 +160,17 @@ int	iscommit (void)
  */
 int	islogclose (void)
 {
+	int	iResult = 0;
+
 	if (iVBInTrans == VBNEEDFLUSH)
-		isrollback ();
+		if (isrollback ())
+			iResult = iserrno;
 	iVBInTrans = VBNOTRANS;
 	if (iVBLogfileHandle != -1)
-		iVBClose (iVBLogfileHandle);
+		if (iVBClose (iVBLogfileHandle))
+			iResult = errno;
 	iVBLogfileHandle = -1;
-	return (0);
+	return (iResult);
 }
 
 /*
@@ -200,126 +190,12 @@ int	islogclose (void)
 int	islogopen (char *pcFilename)
 {
 	if (iVBLogfileHandle != -1)
-		islogclose ();
+		islogclose ();		// Ignore the return value!
 	iVBLogfileHandle = iVBOpen (pcFilename, O_RDWR, 0);
 	if (iVBLogfileHandle == -1)
 	{
 		iserrno = ELOGOPEN;
 		return (-1);
-	}
-	return (0);
-}
-
-/*
- * Name:
- *	int	isrecover (void)
- * Arguments:
- *	NONE
- * Prerequisites:
- *	NONE
- * Returns:
- *	-1	Failure (iserrno contains more info)
- *	0	Success
- * Problems:
- *	NONE known
- */
-int	isrecover (void)
-{
-	char	*pcBuffer,
-		*pcRow;
-	int	iHandle,
-		iLoop,
-		iLocalHandle [VB_MAX_FILES + 1];
-	off_t	tLength,
-		tLength2,
-		tOffset,
-		tRowNumber,
-		tNewRow;
-
-	for (iLoop = 0; iLoop <= VB_MAX_FILES; iLoop++)
-	{
-		if (psVBFile [iLoop])
-			iLocalHandle [iLoop] = iLoop;
-		else
-			iLocalHandle [iLoop] = -1;
-	}
-	iVBInTrans = VBRECOVER;
-	psLogHeader = (struct SLOGHDR *) (cTransBuffer - INTSIZE);
-	pcBuffer = cTransBuffer - INTSIZE + sizeof (struct SLOGHDR);
-	// Begin by reading the header of the first transaction
-	iserrno = EBADFILE;
-	if (tVBLseek (iVBLogfileHandle, 0, SEEK_SET) != 0)
-		return (-1);
-	if (tVBRead (iVBLogfileHandle, cTransBuffer, INTSIZE) != INTSIZE)
-		return (0);	// Nothing to do!
-	tOffset = INTSIZE;
-	tLength = ldint (cTransBuffer);
-	// Now, recurse forwards
-	while (1)
-	{
-		tLength2 = tVBRead (iVBLogfileHandle, cTransBuffer, tLength);
-		iserrno = EBADFILE;
-		if (tLength2 != tLength && tLength2 != tLength - INTSIZE)
-			return (-1);
-		iHandle = ldint (pcBuffer);
-		tRowNumber = ldquad (pcBuffer + INTSIZE);
-		if (!memcmp (psLogHeader->cOperation, VBL_FILEOPEN, 2))
-		{
-			if (iLocalHandle [iHandle] != -1)
-				return (-1);
-			iLocalHandle [iHandle] = isopen (pcBuffer + INTSIZE + INTSIZE, ISMANULOCK + ISINOUT);
-			if (iLocalHandle [iHandle] == -1)
-				return (-1);
-		}
-		if (!memcmp (psLogHeader->cOperation, VBL_FILECLOSE, 2))
-		{
-			if (iLocalHandle [iHandle] == -1)
-				return (-1);
-			iLocalHandle [iHandle] = isclose (iHandle);
-		}
-		if (!memcmp (psLogHeader->cOperation, VBL_INSERT, 2))
-		{
-			if (iLocalHandle [iHandle] == -1)
-				return (-1);
-			isreclen = ldint (pcBuffer + INTSIZE + QUADSIZE);
-			pcRow = pcBuffer + INTSIZE + QUADSIZE + INTSIZE;
-			iVBEnter (iLocalHandle [iHandle], TRUE);
-			psVBFile [iLocalHandle [iHandle]]->sFlags.iIsDictLocked = 2;
-			tNewRow = tVBDataCountGetNext (iLocalHandle [iHandle]);
-			iserrno = EBADFILE;
-			if (tRowNumber != tNewRow)
-				return (-1);
-			if (iVBWriteRow (iLocalHandle [iHandle], pcRow, tRowNumber))
-				return (-1);
-			iVBExit (iLocalHandle [iHandle]);
-		}
-		if (!memcmp (psLogHeader->cOperation, VBL_UPDATE, 2))
-		{
-			if (iLocalHandle [iHandle] == -1)
-				return (-1);
-			isreclen = ldint (pcBuffer + INTSIZE + QUADSIZE);
-			pcRow = pcBuffer + INTSIZE + QUADSIZE + INTSIZE + INTSIZE + isreclen;
-			isreclen = ldint (pcBuffer + INTSIZE + QUADSIZE + INTSIZE);
-			// BUG - Should we READ the row first and compare it?
-			if (isrewrec (iLocalHandle [iHandle], tRowNumber, pcRow))
-				return (-1);
-		}
-		if (!memcmp (psLogHeader->cOperation, VBL_DELETE, 2))
-		{
-			if (iLocalHandle [iHandle] == -1)
-				return (-1);
-			// BUG - Should we READ the row first and compare it?
-			if (isdelrec (iLocalHandle [iHandle], tRowNumber))
-				return (-1);
-			iVBEnter (iLocalHandle [iHandle], TRUE);
-			psVBFile [iLocalHandle [iHandle]]->sFlags.iIsDictLocked = 3;
-			if (iVBDataFree (iLocalHandle [iHandle], tRowNumber))
-				return (-1);
-			iVBExit (iLocalHandle [iHandle]);
-		}
-		if (tLength2 == tLength - INTSIZE)
-			break;
-		tLength = ldint (cTransBuffer + tLength - INTSIZE);
 	}
 	return (0);
 }
@@ -339,6 +215,8 @@ int	isrecover (void)
  */
 int	isrollback (void)
 {
+	int	iLoop,
+		iResult = 0;
 	off_t	tOffset;
 
 	if (iVBLogfileHandle == -1)
@@ -349,6 +227,14 @@ int	isrollback (void)
 		return (-1);
 	}
 	// Don't write out a 'null' transaction!
+	for (iLoop = 0; iLoop <= iVBMaxUsedHandle; iLoop++)
+		if (psVBFile [iLoop] && psVBFile [iLoop]->iIsOpen == 1)
+		{
+			iResult = iserrno;
+			if (!iVBClose2 (iLoop))
+				iserrno = iResult;
+			iResult = 0;
+		}
 	if (iVBInTrans == VBBEGIN)
 		return (0);
 	iVBInTrans = VBROLLBACK;
@@ -357,12 +243,20 @@ int	isrollback (void)
 	vTransHdr (VBL_ROLLBACK);
 	iserrno = iWriteTrans (0, TRUE);
 	if (!iserrno)
-		iserrno = iRollMeBack (tOffset);
+		iserrno = iVBRollMeBack (tOffset, tVBPID, FALSE);
 	iDemoteLocks ();
 	iVBInTrans = VBNOTRANS;
 	if (iserrno)
 		return (-1);
-	return (0);
+	for (iLoop = 0; iLoop <= iVBMaxUsedHandle; iLoop++)
+	{
+		if (psVBFile [iLoop] && psVBFile [iLoop]->iIsOpen == 1)
+			if (iVBClose2 (iLoop))
+				iResult = iserrno;
+		if (psVBFile [iLoop] && psVBFile [iLoop]->sFlags.iIsDictLocked & 0x04)
+			iResult |= iVBExit (iLoop);
+	}
+	return (iResult ? -1 : 0);
 }
 
 /*
@@ -377,6 +271,8 @@ int	isrollback (void)
  *		The maximum row length
  *	struct	keydesc	*psKeydesc
  *		The primary index being created
+ *	int	iMode
+ *		The open mode (Only used to determine is ISNOLOG is set)
  * Prerequisites:
  *	NONE
  * Returns:
@@ -386,14 +282,14 @@ int	isrollback (void)
  *	NONE known
  */
 int
-iVBTransBuild (char *pcFilename, int iMinRowLen, int iMaxRowLen, struct keydesc *psKeydesc)
+iVBTransBuild (char *pcFilename, int iMinRowLen, int iMaxRowLen, struct keydesc *psKeydesc, int iMode)
 {
 	char	*pcBuffer;
 	int	iLength = 0,
 		iLength2,
 		iLoop;
 
-	if (iVBLogfileHandle == -1)
+	if (iVBLogfileHandle == -1 || iMode & ISNOLOG)
 		return (0);
 	// Don't log transactions if we're in rollback / recover mode
 	if (iVBInTrans > VBNEEDFLUSH)
@@ -402,7 +298,7 @@ iVBTransBuild (char *pcFilename, int iMinRowLen, int iMaxRowLen, struct keydesc 
 		if (iWriteBegin ())
 			return (-1);
 	vTransHdr (VBL_BUILD);
-	pcBuffer = cTransBuffer + sizeof (struct SLOGHDR);
+	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR);
 	stint (0x0806, pcBuffer);
 	stint (iMinRowLen, pcBuffer + INTSIZE);
 	stint (iMaxRowLen, pcBuffer + (2 * INTSIZE));
@@ -419,7 +315,7 @@ iVBTransBuild (char *pcFilename, int iMinRowLen, int iMaxRowLen, struct keydesc 
 	stint (iLength, pcBuffer - INTSIZE);
 	iLength = (INTSIZE * 6) + (INTSIZE * 3 * (psKeydesc->iNParts));
 	iLength2 = strlen (pcFilename) + 1;
-	pcBuffer = cTransBuffer + sizeof (struct SLOGHDR) + iLength;
+	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR) + iLength;
 	memcpy (pcBuffer, pcFilename, iLength2);
 	iserrno = iWriteTrans (iLength + iLength2, FALSE);
 	if (iserrno)
@@ -450,7 +346,7 @@ iVBTransCreateIndex (int iHandle, struct keydesc *psKeydesc)
 	int	iLength = 0,
 		iLoop;
 
-	if (iVBLogfileHandle == -1)
+	if (iVBLogfileHandle == -1 || psVBFile [iHandle]->iOpenMode & ISNOLOG)
 		return (0);
 	// Don't log transactions if we're in rollback / recover mode
 	if (iVBInTrans > VBNEEDFLUSH)
@@ -459,7 +355,7 @@ iVBTransCreateIndex (int iHandle, struct keydesc *psKeydesc)
 		if (iWriteBegin ())
 			return (-1);
 	vTransHdr (VBL_CREINDEX);
-	pcBuffer = cTransBuffer + sizeof (struct SLOGHDR);
+	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR);
 	stint (iHandle, pcBuffer);
 	stint (psKeydesc->iFlags, pcBuffer + INTSIZE);
 	stint (psKeydesc->iNParts, pcBuffer + (2 * INTSIZE));
@@ -522,7 +418,7 @@ iVBTransDelete (int iHandle, off_t tRowNumber, int iRowLength)
 {
 	char	*pcBuffer;
 
-	if (iVBLogfileHandle == -1)
+	if (iVBLogfileHandle == -1 || psVBFile [iHandle]->iOpenMode & ISNOLOG)
 		return (0);
 	// Don't log transactions if we're in rollback / recover mode
 	if (iVBInTrans > VBNEEDFLUSH)
@@ -532,9 +428,8 @@ iVBTransDelete (int iHandle, off_t tRowNumber, int iRowLength)
 			return (-1);
 	if (psVBFile [iHandle]->sFlags.iTransYet == 0)
 		iVBTransOpen (iHandle, psVBFile [iHandle]->cFilename);
-	psVBFile [iHandle]->sFlags.iTransYet = 1;
 	vTransHdr (VBL_DELETE);
-	pcBuffer = cTransBuffer + sizeof (struct SLOGHDR);
+	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR);
 	stint (iHandle, pcBuffer);
 	stquad (tRowNumber, pcBuffer + INTSIZE);
 	stint (iRowLength, pcBuffer + INTSIZE + QUADSIZE);
@@ -569,7 +464,7 @@ iVBTransDeleteIndex (int iHandle, struct keydesc *psKeydesc)
 	int	iLength = 0,
 		iLoop;
 
-	if (iVBLogfileHandle == -1)
+	if (iVBLogfileHandle == -1 || psVBFile [iHandle]->iOpenMode & ISNOLOG)
 		return (0);
 	// Don't log transactions if we're in rollback / recover mode
 	if (iVBInTrans > VBNEEDFLUSH)
@@ -578,7 +473,7 @@ iVBTransDeleteIndex (int iHandle, struct keydesc *psKeydesc)
 		if (iWriteBegin ())
 			return (-1);
 	vTransHdr (VBL_DELINDEX);
-	pcBuffer = cTransBuffer + sizeof (struct SLOGHDR);
+	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR);
 	stint (iHandle, pcBuffer);
 	stint (psKeydesc->iFlags, pcBuffer + INTSIZE);
 	stint (psKeydesc->iNParts, pcBuffer + (2 * INTSIZE));
@@ -628,7 +523,7 @@ iVBTransErase (char *pcFilename)
 			return (-1);
 	vTransHdr (VBL_FILEERASE);
 	iLength = strlen (pcFilename) + 1;
-	pcBuffer = cTransBuffer + sizeof (struct SLOGHDR);
+	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR);
 	memcpy (pcBuffer, pcFilename, iLength);
 	iserrno = iWriteTrans (iLength, FALSE);
 	if (iserrno)
@@ -658,10 +553,10 @@ iVBTransClose (int iHandle, char *pcFilename)
 	char	*pcBuffer;
 	int	iLength;
 
-	if (iVBLogfileHandle == -1)
+	if (iVBLogfileHandle == -1 || psVBFile [iHandle]->iOpenMode & ISNOLOG)
 		return (0);
 	// Don't log transactions if we're in rollback / recover mode
-	if (iVBInTrans > VBNEEDFLUSH)
+	if (iVBInTrans > VBROLLBACK)
 		return (0);
 	if (psVBFile [iHandle]->sFlags.iTransYet == 0)
 		return (0);
@@ -670,7 +565,7 @@ iVBTransClose (int iHandle, char *pcFilename)
 			return (-1);
 	vTransHdr (VBL_FILECLOSE);
 	iLength = strlen (pcFilename) + 1;
-	pcBuffer = cTransBuffer + sizeof (struct SLOGHDR);
+	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR);
 	stint (iHandle, pcBuffer);
 	stint (0, pcBuffer + INTSIZE);
 	memcpy (pcBuffer + INTSIZE + INTSIZE, pcFilename, iLength);
@@ -703,7 +598,7 @@ iVBTransOpen (int iHandle, char *pcFilename)
 	char	*pcBuffer;
 	int	iLength;
 
-	if (iVBLogfileHandle == -1)
+	if (iVBLogfileHandle == -1 || psVBFile [iHandle]->iOpenMode & ISNOLOG)
 		return (0);
 	// Don't log transactions if we're in rollback / recover mode
 	if (iVBInTrans > VBNEEDFLUSH)
@@ -711,9 +606,10 @@ iVBTransOpen (int iHandle, char *pcFilename)
 	if (iVBInTrans == VBBEGIN)
 		if (iWriteBegin ())
 			return (-1);
+	psVBFile [iHandle]->sFlags.iTransYet = 2;
 	vTransHdr (VBL_FILEOPEN);
 	iLength = strlen (pcFilename) + 1;
-	pcBuffer = cTransBuffer + sizeof (struct SLOGHDR);
+	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR);
 	stint (iHandle, pcBuffer);
 	stint (0, pcBuffer + INTSIZE);
 	memcpy (pcBuffer + INTSIZE + INTSIZE, pcFilename, iLength);
@@ -749,7 +645,7 @@ iVBTransInsert (int iHandle, off_t tRowNumber, int iRowLength, char *pcRow)
 {
 	char	*pcBuffer;
 
-	if (iVBLogfileHandle == -1)
+	if (iVBLogfileHandle == -1 || psVBFile [iHandle]->iOpenMode & ISNOLOG)
 		return (0);
 	// Don't log transactions if we're in rollback / recover mode
 	if (iVBInTrans > VBNEEDFLUSH)
@@ -759,9 +655,8 @@ iVBTransInsert (int iHandle, off_t tRowNumber, int iRowLength, char *pcRow)
 			return (-1);
 	if (psVBFile [iHandle]->sFlags.iTransYet == 0)
 		iVBTransOpen (iHandle, psVBFile [iHandle]->cFilename);
-	psVBFile [iHandle]->sFlags.iTransYet = 1;
 	vTransHdr (VBL_INSERT);
-	pcBuffer = cTransBuffer + sizeof (struct SLOGHDR);
+	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR);
 	stint (iHandle, pcBuffer);
 	stquad (tRowNumber, pcBuffer + INTSIZE);
 	stint (iRowLength, pcBuffer + INTSIZE + QUADSIZE);
@@ -806,7 +701,7 @@ iVBTransRename (char *pcOldname, char *pcNewname)
 		if (iWriteBegin ())
 			return (-1);
 	vTransHdr (VBL_RENAME);
-	pcBuffer = cTransBuffer + sizeof (struct SLOGHDR);
+	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR);
 	iLength1 = strlen (pcOldname) + 1;
 	iLength2 = strlen (pcNewname) + 1;
 	stint (iLength1, pcBuffer);
@@ -841,7 +736,7 @@ iVBTransSetUnique (int iHandle, off_t tUniqueID)
 {
 	char	*pcBuffer;
 
-	if (iVBLogfileHandle == -1)
+	if (iVBLogfileHandle == -1 || psVBFile [iHandle]->iOpenMode & ISNOLOG)
 		return (0);
 	// Don't log transactions if we're in rollback / recover mode
 	if (iVBInTrans > VBNEEDFLUSH)
@@ -851,9 +746,8 @@ iVBTransSetUnique (int iHandle, off_t tUniqueID)
 			return (-1);
 	if (psVBFile [iHandle]->sFlags.iTransYet == 0)
 		iVBTransOpen (iHandle, psVBFile [iHandle]->cFilename);
-	psVBFile [iHandle]->sFlags.iTransYet = 1;
 	vTransHdr (VBL_SETUNIQUE);
-	pcBuffer = cTransBuffer + sizeof (struct SLOGHDR);
+	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR);
 	stint (iHandle, pcBuffer);
 	stquad (tUniqueID, pcBuffer + INTSIZE);
 	iserrno = iWriteTrans (INTSIZE + QUADSIZE, FALSE);
@@ -883,7 +777,7 @@ iVBTransUniqueID (int iHandle, off_t tUniqueID)
 {
 	char	*pcBuffer;
 
-	if (iVBLogfileHandle == -1)
+	if (iVBLogfileHandle == -1 || psVBFile [iHandle]->iOpenMode & ISNOLOG)
 		return (0);
 	// Don't log transactions if we're in rollback / recover mode
 	if (iVBInTrans > VBNEEDFLUSH)
@@ -893,9 +787,8 @@ iVBTransUniqueID (int iHandle, off_t tUniqueID)
 			return (-1);
 	if (psVBFile [iHandle]->sFlags.iTransYet == 0)
 		iVBTransOpen (iHandle, psVBFile [iHandle]->cFilename);
-	psVBFile [iHandle]->sFlags.iTransYet = 1;
 	vTransHdr (VBL_UNIQUEID);
-	pcBuffer = cTransBuffer + sizeof (struct SLOGHDR);
+	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR);
 	stint (iHandle, pcBuffer);
 	stquad (tUniqueID, pcBuffer + INTSIZE);
 	iserrno = iWriteTrans (INTSIZE + QUADSIZE, FALSE);
@@ -932,7 +825,7 @@ iVBTransUpdate (int iHandle, off_t tRowNumber, int iOldRowLen, int iNewRowLen, c
 	char	*pcBuffer;
 	int	iLength;
 
-	if (iVBLogfileHandle == -1)
+	if (iVBLogfileHandle == -1 || psVBFile [iHandle]->iOpenMode & ISNOLOG)
 		return (0);
 	// Don't log transactions if we're in rollback / recover mode
 	if (iVBInTrans > VBNEEDFLUSH)
@@ -942,9 +835,8 @@ iVBTransUpdate (int iHandle, off_t tRowNumber, int iOldRowLen, int iNewRowLen, c
 			return (-1);
 	if (psVBFile [iHandle]->sFlags.iTransYet == 0)
 		iVBTransOpen (iHandle, psVBFile [iHandle]->cFilename);
-	psVBFile [iHandle]->sFlags.iTransYet = 1;
 	vTransHdr (VBL_UPDATE);
-	pcBuffer = cTransBuffer + sizeof (struct SLOGHDR);
+	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR);
 	stint (iHandle, pcBuffer);
 	stquad (tRowNumber, pcBuffer + INTSIZE);
 	stint (iOldRowLen, pcBuffer + INTSIZE + QUADSIZE);
@@ -992,12 +884,12 @@ iVBTransUpdate (int iHandle, off_t tRowNumber, int iOldRowLen, int iNewRowLen, c
 static	void
 vTransHdr (char *pcTransType)
 {
-	psLogHeader = (struct SLOGHDR *) cTransBuffer;
-	memcpy (psLogHeader->cOperation, pcTransType, 2);
-	stint (tVBPID, psLogHeader->cPID);	// Assumes pid_t is short
-	stint (tVBUID, psLogHeader->cUID);	// Assumes uid_t is short
-	stlong (time ((time_t *) 0), psLogHeader->cTime);	// Assumes time_t is long
-	stint (0, psLogHeader->cRFU1);		// BUG - WTF is this?
+	psVBLogHeader = (struct SLOGHDR *) cVBTransBuffer;
+	memcpy (psVBLogHeader->cOperation, pcTransType, 2);
+	stint (tVBPID, psVBLogHeader->cPID);	// Assumes pid_t is short
+	stint (tVBUID, psVBLogHeader->cUID);	// Assumes uid_t is short
+	stlong (time ((time_t *) 0), psVBLogHeader->cTime);	// Assumes time_t is long
+	stint (0, psVBLogHeader->cRFU1);		// BUG - WTF is this?
 }
 
 /*
@@ -1031,13 +923,13 @@ static	int	iPrevLen = 0;
 static	off_t	tOffset = 0;
 
 	iTransLength += sizeof (struct SLOGHDR) + INTSIZE;
-	stint (iTransLength, cTransBuffer);
-	stint (iTransLength, cTransBuffer + iTransLength - INTSIZE);
+	stint (iTransLength, cVBTransBuffer);
+	stint (iTransLength, cVBTransBuffer + iTransLength - INTSIZE);
 	if (iRollback)
 	{
-		psLogHeader = (struct SLOGHDR *) cTransBuffer;
-		stint (tOffset, psLogHeader->cLastPosn);
-		stint (iPrevLen, psLogHeader->cLastLength);
+		psVBLogHeader = (struct SLOGHDR *) cVBTransBuffer;
+		stint (tOffset, psVBLogHeader->cLastPosn);
+		stint (iPrevLen, psVBLogHeader->cLastLength);
 		tOffset = tVBLseek (iVBLogfileHandle, 0, SEEK_END);
 		if (tOffset == -1)
 			return (ELOGWRIT);
@@ -1045,13 +937,13 @@ static	off_t	tOffset = 0;
 	}
 	else
 	{
-		psLogHeader = (struct SLOGHDR *) cTransBuffer;
-		stint (0, psLogHeader->cLastPosn);
-		stint (0, psLogHeader->cLastLength);
+		psVBLogHeader = (struct SLOGHDR *) cVBTransBuffer;
+		stint (0, psVBLogHeader->cLastPosn);
+		stint (0, psVBLogHeader->cLastLength);
 		if (tVBLseek (iVBLogfileHandle, 0, SEEK_END) == -1)
 			return (ELOGWRIT);
 	}
-	if (tVBWrite (iVBLogfileHandle, (void *) cTransBuffer, (size_t) iTransLength) != (ssize_t) iTransLength)
+	if (tVBWrite (iVBLogfileHandle, (void *) cVBTransBuffer, (size_t) iTransLength) != (ssize_t) iTransLength)
 		return (ELOGWRIT);
 	if (iVBInTrans == VBBEGIN)
 		iVBInTrans = VBNEEDFLUSH;
@@ -1112,7 +1004,7 @@ iDemoteLocks (void)
 
 	for (iHandle = 0; iHandle <= iVBMaxUsedHandle; iHandle++)
 	{
-		if (!psVBFile [iHandle])
+		if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen == 2)
 			continue;
 		if (psVBFile [iHandle]->iOpenMode & ISEXCLLOCK)
 			continue;
@@ -1129,10 +1021,16 @@ iDemoteLocks (void)
 
 /*
  * Name:
- *	static	int	iRollMeBack (off_t tOffset);
+ *	int	iVBRollMeBack (off_t tOffset, int iPID, int iInRecover);
  * Arguments:
  *	off_t	tOffset
  *		The position within the logfile to begin the backwards scan
+ *		It is assumed that this is at a true transaction 'boundary'
+ *	int	iPID
+ *		The process ID to 'look' for
+ *	int	iInRecover
+ *		FALSE	Nope
+ *		TRUE	Yep, we need to force-allocate the data rows
  * Prerequisites:
  *	NONE
  * Returns:
@@ -1143,12 +1041,13 @@ iDemoteLocks (void)
  * Problems:
  *	None known
  */
-static	int
-iRollMeBack (off_t tOffset)
+int
+iVBRollMeBack (off_t tOffset, int iPID, int iInRecover)
 {
 	char	*pcBuffer,
 		*pcRow;
-	int	iFoundBegin = FALSE,
+	int	iErrorEncountered = FALSE,
+		iFoundBegin = FALSE,
 		iHandle,
 		iLoop,
 		iLocalHandle [VB_MAX_FILES + 1],
@@ -1164,18 +1063,18 @@ iRollMeBack (off_t tOffset)
 			iLocalHandle [iLoop] = -1;
 		iSavedHandle [iLoop] = iLocalHandle [iLoop];
 	}
-	psLogHeader = (struct SLOGHDR *) (cTransBuffer + INTSIZE);
-	pcBuffer = cTransBuffer + INTSIZE + sizeof (struct SLOGHDR);
+	psVBLogHeader = (struct SLOGHDR *) (cVBTransBuffer + INTSIZE);
+	pcBuffer = cVBTransBuffer + INTSIZE + sizeof (struct SLOGHDR);
 	// Begin by reading the footer of the previous transaction
 	tOffset -= INTSIZE;
 	if (tVBLseek (iVBLogfileHandle, tOffset, SEEK_SET) != tOffset)
 		return (EBADFILE);
-	if (tVBRead (iVBLogfileHandle, cTransBuffer, INTSIZE) != INTSIZE)
+	if (tVBRead (iVBLogfileHandle, cVBTransBuffer, INTSIZE) != INTSIZE)
 		return (EBADFILE);
 	// Now, recurse backwards
 	while (!iFoundBegin)
 	{
-		tLength = ldint (cTransBuffer);
+		tLength = ldint (cVBTransBuffer);
 		if (!tLength)
 			return (EBADFILE);
 		tOffset -= tLength;
@@ -1184,9 +1083,9 @@ iRollMeBack (off_t tOffset)
 		{
 			if (tVBLseek (iVBLogfileHandle, 0, SEEK_SET) != 0)
 				return (EBADFILE);
-			if (tVBRead (iVBLogfileHandle, cTransBuffer + INTSIZE, tLength - INTSIZE) != tLength - INTSIZE)
+			if (tVBRead (iVBLogfileHandle, cVBTransBuffer + INTSIZE, tLength - INTSIZE) != tLength - INTSIZE)
 				return (EBADFILE);
-			if (!memcmp (psLogHeader->cOperation, VBL_BEGIN, 2))
+			if (!memcmp (psVBLogHeader->cOperation, VBL_BEGIN, 2))
 				break;
 			return (EBADFILE);
 		}
@@ -1196,41 +1095,33 @@ iRollMeBack (off_t tOffset)
 				return (EBADFILE);
 			if (tVBLseek (iVBLogfileHandle, tOffset, SEEK_SET) != tOffset)
 				return (EBADFILE);
-			if (tVBRead (iVBLogfileHandle, cTransBuffer, tLength) != tLength)
+			if (tVBRead (iVBLogfileHandle, cVBTransBuffer, tLength) != tLength)
 				return (EBADFILE);
 		}
 		// Is it OURS?
-		if (ldint (psLogHeader->cPID) != tVBPID)
+		if (ldint (psVBLogHeader->cPID) != iPID)
 			continue;
-		if (!memcmp (psLogHeader->cOperation, VBL_BEGIN, 2))
+		if (!memcmp (psVBLogHeader->cOperation, VBL_BEGIN, 2))
 			break;
 		iHandle = ldint (pcBuffer);
 		tRowNumber = ldquad (pcBuffer + INTSIZE);
-		if (!memcmp (psLogHeader->cOperation, VBL_FILECLOSE, 2))
+		if (!memcmp (psVBLogHeader->cOperation, VBL_FILECLOSE, 2))
 		{
-			if (iLocalHandle [iHandle] != -1)
+			if (iLocalHandle [iHandle] != -1 && psVBFile [iHandle]->iIsOpen == 0)
 				return (EBADFILE);
 			iLocalHandle [iHandle] = isopen (pcBuffer + INTSIZE + INTSIZE, ISMANULOCK + ISINOUT);
 			if (iLocalHandle [iHandle] == -1)
 				return (ETOOMANY);
 		}
-		if (!memcmp (psLogHeader->cOperation, VBL_INSERT, 2))
+		if (!memcmp (psVBLogHeader->cOperation, VBL_INSERT, 2))
 		{
 			if (iLocalHandle [iHandle] == -1)
 				return (EBADFILE);
 			// BUG? - Should we READ the row first and compare it?
 			if (isdelrec (iLocalHandle [iHandle], tRowNumber))
-				return (EBADFILE);
-			iVBEnter (iLocalHandle [iHandle], TRUE);
-			psVBFile [iLocalHandle [iHandle]]->sFlags.iIsDictLocked = 3;
-			if (tRowNumber == ldquad (psVBFile [iLocalHandle [iHandle]]->sDictNode.cDataCount))
-				stquad (tRowNumber - 1, psVBFile [iLocalHandle [iHandle]]->sDictNode.cDataCount);
-			else
-				if (iVBDataFree (iLocalHandle [iHandle], tRowNumber))
-					return (EBADFILE);
-			iVBExit (iLocalHandle [iHandle]);
+				return (iserrno);
 		}
-		if (!memcmp (psLogHeader->cOperation, VBL_UPDATE, 2))
+		if (!memcmp (psVBLogHeader->cOperation, VBL_UPDATE, 2))
 		{
 			if (iLocalHandle [iHandle] == -1)
 				return (EBADFILE);
@@ -1238,33 +1129,51 @@ iRollMeBack (off_t tOffset)
 			pcRow = pcBuffer + INTSIZE + QUADSIZE + INTSIZE + INTSIZE;
 			// BUG? - Should we READ the row first and compare it?
 			if (isrewrec (iLocalHandle [iHandle], tRowNumber, pcRow))
-				return (EBADFILE);
+				return (iserrno);
 		}
-		if (!memcmp (psLogHeader->cOperation, VBL_DELETE, 2))
+		if (!memcmp (psVBLogHeader->cOperation, VBL_DELETE, 2))
 		{
 			if (iLocalHandle [iHandle] == -1)
 				return (EBADFILE);
 			isreclen = ldint (pcBuffer + INTSIZE + QUADSIZE);
 			pcRow = pcBuffer + INTSIZE + QUADSIZE + INTSIZE;
 			iVBEnter (iLocalHandle [iHandle], TRUE);
-			psVBFile [iLocalHandle [iHandle]]->sFlags.iIsDictLocked = 2;
-			if (iVBWriteRow (iLocalHandle [iHandle], pcRow, tRowNumber))
-				return (EBADFILE);
+			psVBFile [iLocalHandle [iHandle]]->sFlags.iIsDictLocked |= 0x02;
+			if (iInRecover && iVBForceDataAllocate (iLocalHandle [iHandle], tRowNumber))
+				iErrorEncountered = EBADFILE;
+			else
+			{
+				if (iVBWriteRow (iLocalHandle [iHandle], pcRow, tRowNumber))
+				{
+					iErrorEncountered = EDUPL;
+					iVBDataFree (iLocalHandle [iHandle], tRowNumber);
+				}
+			}
 			iVBExit (iLocalHandle [iHandle]);
+		}
+		if (!memcmp (psVBLogHeader->cOperation, VBL_FILEOPEN, 2))
+		{
+			if (iLocalHandle [iHandle] == -1)
+				return (EBADFILE);
+			isclose (iLocalHandle [iHandle]);
+			iLocalHandle [iHandle] = -1;
 		}
 	}
 	for (iLoop = 0; iLoop <= VB_MAX_FILES; iLoop++)
 		if (iSavedHandle [iLoop] == -1 && psVBFile [iSavedHandle [iLoop]])
 			isclose (iSavedHandle [iLoop]);
-	return (0);
+	return (iErrorEncountered);
 }
 
 /*
  * Name:
- *	static	int	iRollMeForward (off_t tOffset);
+ *	int	iVBRollMeForward (off_t tOffset, int iPID);
  * Arguments:
  *	off_t	tOffset
  *		The position within the logfile to begin the backwards scan
+ *		It is assumed that this is at a true transaction 'boundary'
+ *	int	iPID
+ *		The process ID to 'look' for
  * Prerequisites:
  *	NONE
  * Returns:
@@ -1275,8 +1184,8 @@ iRollMeBack (off_t tOffset)
  * Problems:
  *	None known
  */
-static	int
-iRollMeForward (off_t tOffset)
+int
+iVBRollMeForward (off_t tOffset, int iPID)
 {
 	char	*pcBuffer;
 	int	iFoundBegin = FALSE,
@@ -1295,18 +1204,18 @@ iRollMeForward (off_t tOffset)
 			iLocalHandle [iLoop] = -1;
 		iSavedHandle [iLoop] = iLocalHandle [iLoop];
 	}
-	psLogHeader = (struct SLOGHDR *) (cTransBuffer + INTSIZE);
-	pcBuffer = cTransBuffer + INTSIZE + sizeof (struct SLOGHDR);
+	psVBLogHeader = (struct SLOGHDR *) (cVBTransBuffer + INTSIZE);
+	pcBuffer = cVBTransBuffer + INTSIZE + sizeof (struct SLOGHDR);
 	// Begin by reading the footer of the previous transaction
 	tOffset -= INTSIZE;
 	if (tVBLseek (iVBLogfileHandle, tOffset, SEEK_SET) != tOffset)
 		return (EBADFILE);
-	if (tVBRead (iVBLogfileHandle, cTransBuffer, INTSIZE) != INTSIZE)
+	if (tVBRead (iVBLogfileHandle, cVBTransBuffer, INTSIZE) != INTSIZE)
 		return (EBADFILE);
 	// Now, recurse backwards
 	while (!iFoundBegin)
 	{
-		tLength = ldint (cTransBuffer);
+		tLength = ldint (cVBTransBuffer);
 		if (!tLength)
 			return (EBADFILE);
 		tOffset -= tLength;
@@ -1315,9 +1224,9 @@ iRollMeForward (off_t tOffset)
 		{
 			if (tVBLseek (iVBLogfileHandle, 0, SEEK_SET) != 0)
 				return (EBADFILE);
-			if (tVBRead (iVBLogfileHandle, cTransBuffer + INTSIZE, tLength - INTSIZE) != tLength - INTSIZE)
+			if (tVBRead (iVBLogfileHandle, cVBTransBuffer + INTSIZE, tLength - INTSIZE) != tLength - INTSIZE)
 				return (EBADFILE);
-			if (!memcmp (psLogHeader->cOperation, VBL_BEGIN, 2))
+			if (!memcmp (psVBLogHeader->cOperation, VBL_BEGIN, 2))
 				break;
 			return (EBADFILE);
 		}
@@ -1327,17 +1236,17 @@ iRollMeForward (off_t tOffset)
 				return (EBADFILE);
 			if (tVBLseek (iVBLogfileHandle, tOffset, SEEK_SET) != tOffset)
 				return (EBADFILE);
-			if (tVBRead (iVBLogfileHandle, cTransBuffer, tLength) != tLength)
+			if (tVBRead (iVBLogfileHandle, cVBTransBuffer, tLength) != tLength)
 				return (EBADFILE);
 		}
 		// Is it OURS?
-		if (ldint (psLogHeader->cPID) != tVBPID)
+		if (ldint (psVBLogHeader->cPID) != tVBPID)
 			continue;
-		if (!memcmp (psLogHeader->cOperation, VBL_BEGIN, 2))
+		if (!memcmp (psVBLogHeader->cOperation, VBL_BEGIN, 2))
 			break;
 		iHandle = ldint (pcBuffer);
 		tRowNumber = ldquad (pcBuffer + INTSIZE);
-		if (!memcmp (psLogHeader->cOperation, VBL_FILECLOSE, 2))
+		if (!memcmp (psVBLogHeader->cOperation, VBL_FILECLOSE, 2))
 		{
 			if (iLocalHandle [iHandle] != -1)
 				return (EBADFILE);
@@ -1345,18 +1254,27 @@ iRollMeForward (off_t tOffset)
 			if (iLocalHandle [iHandle] == -1)
 				return (ETOOMANY);
 		}
-		if (!memcmp (psLogHeader->cOperation, VBL_DELETE, 2))
+		if (!memcmp (psVBLogHeader->cOperation, VBL_DELETE, 2))
 		{
 			if (iLocalHandle [iHandle] == -1)
 				return (EBADFILE);
 			iVBEnter (iLocalHandle [iHandle], TRUE);
-			psVBFile [iLocalHandle [iHandle]]->sFlags.iIsDictLocked = 3;
+			psVBFile [iLocalHandle [iHandle]]->sFlags.iIsDictLocked |= 0x04;
 			if (tRowNumber == ldquad (psVBFile [iLocalHandle [iHandle]]->sDictNode.cDataCount))
+			{
+				psVBFile [iLocalHandle [iHandle]]->sFlags.iIsDictLocked |= 0x02;
 				stquad (tRowNumber - 1, psVBFile [iLocalHandle [iHandle]]->sDictNode.cDataCount);
+			}
 			else
 				if (iVBDataFree (iLocalHandle [iHandle], tRowNumber))
 					return (EBADFILE);
 			iVBExit (iLocalHandle [iHandle]);
+		}
+		if (!memcmp (psVBLogHeader->cOperation, VBL_FILEOPEN, 2))
+		{
+			if (iLocalHandle [iHandle] == -1)
+				return (EBADFILE);
+			isclose (iLocalHandle [iHandle]);
 		}
 	}
 	for (iLoop = 0; iLoop <= VB_MAX_FILES; iLoop++)

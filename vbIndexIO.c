@@ -8,9 +8,12 @@
  *	This module handles ALL the low level index file I/O operations for the
  *	VBISAM library.
  * Version:
- *	$Id: vbIndexIO.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
+ *	$Id: vbIndexIO.c,v 1.6 2004/06/06 20:52:21 trev_vb Exp $
  * Modification History:
  *	$Log: vbIndexIO.c,v $
+ *	Revision 1.6  2004/06/06 20:52:21  trev_vb
+ *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
+ *	
  *	Revision 1.5  2004/01/06 14:31:59  trev_vb
  *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
  *	
@@ -31,113 +34,18 @@
  */
 #include	"isinternal.h"
 
-static	char	cNode0 [MAX_NODE_LENGTH],
-		cNode1 [MAX_NODE_LENGTH];
-
 /*
  * Prototypes
  */
-int	iVBNodeRead (int, void *, off_t);
-int	iVBNodeWrite (int, void *, off_t);
-int	iVBDictionarySet (int, off_t, off_t);
-off_t	tVBDictionaryGet (int, off_t);
-off_t	tVBDictionaryIncrement (int, off_t, int);
 int	iVBUniqueIDSet (int, off_t);
 off_t	tVBUniqueIDGetNext (int);
-off_t	tVBTransNumberSet (int);
-int	iVBTransNumberGet (int, off_t);
 off_t	tVBNodeCountGetNext (int);
 off_t	tVBDataCountGetNext (int);
 int	iVBNodeFree (int, off_t);
 int	iVBDataFree (int, off_t);
 off_t	tVBNodeAllocate (int);
-off_t	tVBDataAllocate (int iHandle);
-
-/*
- * Name:
- *	int	iVBNodeRead (int iHandle, void *pvBuffer, off_t tNodeNumber);
- * Arguments:
- *	int	iHandle
- *		The open file descriptor of the VBISAM file (Not the idx file)
- *	void	*pvBuffer
- *		The address of the buffer
- *	off_t	tNodeNumber
- *		The node number to be read in
- * Prerequisites:
- *	Any needed locking is handled external to this function
- * Returns:
- *	0	Success
- *	ENOTOPEN
- *	EBADFILE
- * Problems:
- *	NONE known
- */
-int
-iVBNodeRead (int iHandle, void *pvBuffer, off_t tNodeNumber)
-{
-	off_t	tResult,
-		tOffset;
-
-	// Sanity check - Is iHandle a currently open table?
-	if (!psVBFile [iHandle])
-		return (ENOTOPEN);
-	if (!psVBFile [iHandle]->sFlags.iIsDictLocked)
-		return (EBADARG);
-
-	tOffset = (off_t) ((tNodeNumber - 1) * psVBFile [iHandle]->iNodeSize);
-	tResult = tVBLseek (psVBFile [iHandle]->iIndexHandle, tOffset, SEEK_SET);
-	if (tResult == (off_t) -1)
-		return (EBADFILE);
-
-	tResult = (off_t) tVBRead (psVBFile [iHandle]->iIndexHandle, pvBuffer, (size_t) psVBFile [iHandle]->iNodeSize);
-	if ((int) tResult != psVBFile [iHandle]->iNodeSize)
-		return (EBADFILE);
-	return (0);
-}
-
-/*
- * Name:
- *	int	iVBNodeWrite (int iHandle, void *pvBuffer, off_t tNodeNumber);
- * Arguments:
- *	int	iHandle
- *		The open file descriptor of the VBISAM file (Not the idx file)
- *	void	*pvBuffer
- *		The address of the buffer
- *	off_t	tNodeNumber
- *		The node number to be written out to
- * Prerequisites:
- *	Any needed locking is handled external to this function
- * Returns:
- *	0	Success
- *	ENOTOPEN
- *	EBADFILE
- * Problems:
- *	NONE known
- */
-int
-iVBNodeWrite (int iHandle, void *pvBuffer, off_t tNodeNumber)
-{
-	off_t	tResult,
-		tOffset;
-
-	// Sanity check - Is iHandle a currently open table?
-	if (!psVBFile [iHandle])
-		return (ENOTOPEN);
-	if (!psVBFile [iHandle]->sFlags.iIsDictLocked)
-		return (EBADARG);
-
-	// BUG? - Should we be allowed to write if the handle is open ISINPUT?
-
-	tOffset = (off_t) ((tNodeNumber - 1) * psVBFile [iHandle]->iNodeSize);
-	tResult = tVBLseek (psVBFile [iHandle]->iIndexHandle, tOffset, SEEK_SET);
-	if (tResult == (off_t) -1)
-		return (EBADFILE);
-
-	tResult = (off_t) tVBWrite (psVBFile [iHandle]->iIndexHandle, pvBuffer, (size_t) psVBFile [iHandle]->iNodeSize);
-	if ((int) tResult != psVBFile [iHandle]->iNodeSize)
-		return (EBADFILE);
-	return (0);
-}
+off_t	tVBDataAllocate (int);
+int	iVBForceDataAllocate (int iHandle, off_t);
 
 /*
  * Name:
@@ -177,7 +85,7 @@ iVBUniqueIDSet (int iHandle, off_t tUniqueID)
 	if (tUniqueID > tValue)
 	{
 		stquad (tUniqueID, psVBFile [iHandle]->sDictNode.cUniqueID);
-		psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
+		psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 	}
 	return (0);
 }
@@ -212,7 +120,7 @@ tVBUniqueIDGetNext (int iHandle)
 
 	tValue = ldquad (psVBFile [iHandle]->sDictNode.cUniqueID);
 	stquad (tValue + 1, psVBFile [iHandle]->sDictNode.cUniqueID);
-	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
+	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 	return (tValue);
 }
 
@@ -246,7 +154,7 @@ tVBNodeCountGetNext (int iHandle)
 
 	tValue = ldquad (psVBFile [iHandle]->sDictNode.cNodeCount) + 1;
 	stquad (tValue, psVBFile [iHandle]->sDictNode.cNodeCount);
-	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
+	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 	return (tValue);
 }
 
@@ -280,7 +188,7 @@ tVBDataCountGetNext (int iHandle)
 
 	tValue = ldquad (psVBFile [iHandle]->sDictNode.cDataCount) + 1;
 	stquad (tValue, psVBFile [iHandle]->sDictNode.cDataCount);
-	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
+	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 	return (tValue);
 }
 
@@ -321,62 +229,60 @@ iVBNodeFree (int iHandle, off_t tNodeNumber)
 		return (-1);
 	iserrno = 0;
 
-	memset (cNode1, 0, (size_t) psVBFile [iHandle]->iNodeSize);
-	stint (INTSIZE, cNode1);
+	memset (cVBNode [1], 0, (size_t) psVBFile [iHandle]->iNodeSize);
+	stint (INTSIZE, cVBNode [1]);
 
 	tHeadNode = ldquad (psVBFile [iHandle]->sDictNode.cNodeFree);
 	// If the list is empty, node tNodeNumber becomes the whole list
 	if (tHeadNode == (off_t) 0)
 	{
-		stint (INTSIZE + QUADSIZE, cNode1);
-		cNode1 [psVBFile [iHandle]->iNodeSize - 2] = 0x7f;
-		cNode1 [psVBFile [iHandle]->iNodeSize - 3] = -2;
-		//iResult = iVBNodeWrite (iHandle, (void *) cNode1, tNodeNumber);
-		iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cNode1);
+		stint (INTSIZE + QUADSIZE, cVBNode [1]);
+		stquad (0, cVBNode [1] + INTSIZE);
+		cVBNode [1] [psVBFile [iHandle]->iNodeSize - 2] = 0x7f;
+		cVBNode [1] [psVBFile [iHandle]->iNodeSize - 3] = -2;
+		iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cVBNode [1]);
 		if (iResult)
 			return (iResult);
 		stquad (tNodeNumber, psVBFile [iHandle]->sDictNode.cNodeFree);
-		psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
+		psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 		return (0);
 	}
 
 	// Read in the head of the current free list
-	//iResult = iVBNodeRead (iHandle, (void *) cNode0, tHeadNode);
-	iResult = iVBBlockRead (iHandle, TRUE, tHeadNode, cNode0);
+	iResult = iVBBlockRead (iHandle, TRUE, tHeadNode, cVBNode [0]);
 	if (iResult)
 		return (iResult);
-	if (cNode0 [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
+	if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
 		return (EBADFILE);
-	if (cNode0 [psVBFile [iHandle]->iNodeSize - 3] != -2)
+	if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 3] != -2)
 		return (EBADFILE);
-	iLengthUsed = ldint (cNode0);
+	iLengthUsed = ldint (cVBNode [0]);
 	if (iLengthUsed >= psVBFile [iHandle]->iNodeSize - (QUADSIZE + 3))
 	{
 		// If there was no space left, tNodeNumber becomes the head
-		cNode1 [psVBFile [iHandle]->iNodeSize - 2] = 0x7f;
-		cNode1 [psVBFile [iHandle]->iNodeSize - 3] = -2;
-		stint (INTSIZE + QUADSIZE, cNode1);
-		stquad (tHeadNode, &cNode1 [INTSIZE]);
-		//iResult = iVBNodeWrite (iHandle, (void *) cNode1, tNodeNumber);
-		iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cNode1);
+		cVBNode [1] [psVBFile [iHandle]->iNodeSize - 2] = 0x7f;
+		cVBNode [1] [psVBFile [iHandle]->iNodeSize - 3] = -2;
+		stint (INTSIZE + QUADSIZE, cVBNode [1]);
+		stquad (tHeadNode, &cVBNode [1] [INTSIZE]);
+		iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cVBNode [1]);
 		if (!iResult)
 		{
 			stquad (tNodeNumber, psVBFile [iHandle]->sDictNode.cNodeFree);
-			psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
+			psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 		}
 		return (iResult);
 	}
 
 	// If we got here, there's space left in the tHeadNode to store it
-	//iResult = iVBNodeWrite (iHandle, (void *) cNode1, tNodeNumber);
-	iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cNode1);
+	cVBNode [1] [psVBFile [iHandle]->iNodeSize - 2] = 0x7f;
+	cVBNode [1] [psVBFile [iHandle]->iNodeSize - 3] = -2;
+	iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cVBNode [1]);
 	if (iResult)
 		return (iResult);
-	stquad (tNodeNumber, &cNode0 [iLengthUsed]);
+	stquad (tNodeNumber, &cVBNode [0] [iLengthUsed]);
 	iLengthUsed += QUADSIZE;
-	stint (iLengthUsed, cNode0);
-	//iResult = iVBNodeWrite (iHandle, (void *) cNode0, tHeadNode);
-	iResult = iVBBlockWrite (iHandle, TRUE, tHeadNode, cNode0);
+	stint (iLengthUsed, cVBNode [0]);
+	iResult = iVBBlockWrite (iHandle, TRUE, tHeadNode, cVBNode [0]);
 
 	return (iResult);
 }
@@ -416,26 +322,31 @@ iVBDataFree (int iHandle, off_t tRowNumber)
 		return (-1);
 	iserrno = 0;
 
+	if (ldquad (psVBFile [iHandle]->sDictNode.cDataCount) == tRowNumber)
+	{
+		stquad (tRowNumber - 1, psVBFile [iHandle]->sDictNode.cDataCount);
+		psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
+		return (0);
+	}
+
 	tHeadNode = ldquad (psVBFile [iHandle]->sDictNode.cDataFree);
 	if (tHeadNode != (off_t) 0)
 	{
-		//iResult = iVBNodeRead (iHandle, (void *) cNode0, tHeadNode);
-		iResult = iVBBlockRead (iHandle, TRUE, tHeadNode, cNode0);
+		iResult = iVBBlockRead (iHandle, TRUE, tHeadNode, cVBNode [0]);
 		if (iResult)
 			return (iResult);
-		if (cNode0 [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
+		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
 			return (EBADFILE);
-		if (cNode0 [psVBFile [iHandle]->iNodeSize - 3] != -1)
+		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 3] != -1)
 			return (EBADFILE);
-		iLengthUsed = ldint (cNode0);
+		iLengthUsed = ldint (cVBNode [0]);
 		if (iLengthUsed < psVBFile [iHandle]->iNodeSize - (QUADSIZE + 3))
 		{
 			// We need to add tRowNumber to the current node
-			stquad ((off_t) tRowNumber, cNode0 + iLengthUsed);
+			stquad ((off_t) tRowNumber, cVBNode [0] + iLengthUsed);
 			iLengthUsed += QUADSIZE;
-			stint (iLengthUsed, cNode0);
-			//iResult = iVBNodeWrite (iHandle, (void *) cNode0, tHeadNode);
-			iResult = iVBBlockWrite (iHandle, TRUE, tHeadNode, cNode0);
+			stint (iLengthUsed, cVBNode [0]);
+			iResult = iVBBlockWrite (iHandle, TRUE, tHeadNode, cVBNode [0]);
 			return (iResult);
 		}
 	}
@@ -444,18 +355,17 @@ iVBDataFree (int iHandle, off_t tRowNumber)
 	tNodeNumber = tVBNodeAllocate (iHandle);
 	if (tNodeNumber == (off_t) -1)
 		return (iserrno);
-	memset (cNode0, 0, MAX_NODE_LENGTH);
-	cNode0 [psVBFile [iHandle]->iNodeSize - 2] = 0x7f;
-	cNode0 [psVBFile [iHandle]->iNodeSize - 3] = -1;
-	stint (2 + (2 * QUADSIZE), cNode0);
-	stquad (tHeadNode, &cNode0 [INTSIZE]);
-	stquad (tRowNumber, &cNode0 [INTSIZE + QUADSIZE]);
-	//iResult = iVBNodeWrite (iHandle, (void *) cNode0, tNodeNumber);
-	iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cNode0);
+	memset (cVBNode [0], 0, MAX_NODE_LENGTH);
+	cVBNode [0] [psVBFile [iHandle]->iNodeSize - 2] = 0x7f;
+	cVBNode [0] [psVBFile [iHandle]->iNodeSize - 3] = -1;
+	stint (INTSIZE + (2 * QUADSIZE), cVBNode [0]);
+	stquad (tHeadNode, &cVBNode [0] [INTSIZE]);
+	stquad (tRowNumber, &cVBNode [0] [INTSIZE + QUADSIZE]);
+	iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cVBNode [0]);
 	if (iResult)
 		return (iResult);
 	stquad (tNodeNumber, psVBFile [iHandle]->sDictNode.cDataFree);
-	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
+	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 	return (0);
 }
 
@@ -493,32 +403,31 @@ tVBNodeAllocate (int iHandle)
 	tHeadNode = ldquad (psVBFile [iHandle]->sDictNode.cNodeFree);
 	if (tHeadNode != (off_t) 0)
 	{
-		//iserrno = iVBNodeRead (iHandle, (void *) cNode0, tHeadNode);
-		iserrno = iVBBlockRead (iHandle, TRUE, tHeadNode, cNode0);
+		iserrno = iVBBlockRead (iHandle, TRUE, tHeadNode, cVBNode [0]);
 		if (iserrno)
 			return (-1);
 		iserrno = EBADFILE;
-		if (cNode0 [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
+		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
 			return (-1);
-		if (cNode0 [psVBFile [iHandle]->iNodeSize - 3] != -2)
+		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 3] != -2)
 			return (-1);
-		iLengthUsed = ldint (cNode0);
+		iLengthUsed = ldint (cVBNode [0]);
 		if (iLengthUsed > (INTSIZE + QUADSIZE))
 		{
-			tValue = ldquad (cNode0 + INTSIZE + QUADSIZE);
-			memcpy (cNode0 + INTSIZE + QUADSIZE, cNode0 + INTSIZE + QUADSIZE + QUADSIZE, iLengthUsed - (INTSIZE + QUADSIZE + QUADSIZE));
+			tValue = ldquad (cVBNode [0] + INTSIZE + QUADSIZE);
+			memcpy (cVBNode [0] + INTSIZE + QUADSIZE, cVBNode [0] + INTSIZE + QUADSIZE + QUADSIZE, iLengthUsed - (INTSIZE + QUADSIZE + QUADSIZE));
 			iLengthUsed -= QUADSIZE;
-			memset (cNode0 + iLengthUsed, 0, QUADSIZE);
-			stint (iLengthUsed, cNode0);
-			iserrno = iVBBlockWrite (iHandle, TRUE, tHeadNode, cNode0);
+			memset (cVBNode [0] + iLengthUsed, 0, QUADSIZE);
+			stint (iLengthUsed, cVBNode [0]);
+			iserrno = iVBBlockWrite (iHandle, TRUE, tHeadNode, cVBNode [0]);
 			if (iserrno)
 				return (-1);
 			return (tValue);
 		}
 		// If it's last entry in the node, use the node itself!
-		tValue = ldquad (cNode0 + INTSIZE);
+		tValue = ldquad (cVBNode [0] + INTSIZE);
 		stquad (tValue, psVBFile [iHandle]->sDictNode.cNodeFree);
-		psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
+		psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 		return (tHeadNode);
 	}
 	// If we get here, we need to allocate a NEW node.
@@ -565,51 +474,153 @@ tVBDataAllocate (int iHandle)
 	tHeadNode = ldquad (psVBFile [iHandle]->sDictNode.cDataFree);
 	while (tHeadNode != (off_t) 0)
 	{
-		//iserrno = iVBNodeRead (iHandle, (void *) cNode0, tHeadNode);
-		iserrno = iVBBlockRead (iHandle, TRUE, tHeadNode, cNode0);
+		iserrno = iVBBlockRead (iHandle, TRUE, tHeadNode, cVBNode [0]);
 		if (iserrno)
 			return (-1);
 		iserrno = EBADFILE;
-		if (cNode0 [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
+		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
 			return (-1);
-		if (cNode0 [psVBFile [iHandle]->iNodeSize - 3] != -1)
+		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 3] != -1)
 			return (-1);
-		iLengthUsed = ldint (&cNode0 [4]);
-		if (iLengthUsed > 4 + (INTSIZE * 2) + QUADSIZE)
+		iLengthUsed = ldint (cVBNode [0]);
+		if (iLengthUsed > INTSIZE + QUADSIZE)
 		{
 			iLengthUsed -= QUADSIZE;
-			stint (iLengthUsed, &cNode0 [4]);
-			tValue = ldquad (&cNode0 [iLengthUsed]);
-			stquad ((off_t) 0, &cNode0 [iLengthUsed]);
-			if (iLengthUsed > 4 + (INTSIZE * 2) + QUADSIZE)
+			stint (iLengthUsed, cVBNode [0]);
+			tValue = ldquad (&cVBNode [0] [iLengthUsed]);
+			stquad ((off_t) 0, &cVBNode [0] [iLengthUsed]);
+			if (iLengthUsed > INTSIZE + QUADSIZE)
 			{
-				//iserrno = iVBNodeWrite (iHandle, (void *) cNode0, tHeadNode);
-				iserrno = iVBBlockWrite (iHandle, TRUE, tHeadNode, cNode0);
+				iserrno = iVBBlockWrite (iHandle, TRUE, tHeadNode, cVBNode [0]);
 				if (iserrno)
 					return (-1);
 				return (tValue);
 			}
 			// If we're using the last entry in the node, advance
-			tNextNode = ldquad (&cNode0 [4 + (INTSIZE * 2)]);
+			tNextNode = ldquad (&cVBNode [0] [INTSIZE]);
 			iResult = iVBNodeFree (iHandle, tHeadNode);
 			if (iResult)
 				return (-1);
 			stquad (tNextNode, psVBFile [iHandle]->sDictNode.cDataFree);
-			psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
+			psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 			return (tValue);
 		}
 		// Ummmm, this is an INTEGRITY ERROR of sorts!
 		// However, let's fix it anyway!
-		tNextNode = ldquad (&cNode0 [4 + (INTSIZE * 2)]);
+		tNextNode = ldquad (&cVBNode [0] [INTSIZE]);
 		iResult = iVBNodeFree (iHandle, tHeadNode);
 		if (iResult)
 			return (-1);
 		stquad (tNextNode, psVBFile [iHandle]->sDictNode.cDataFree);
-		psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
+		psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 		tHeadNode = tNextNode;
 	}
 	// If we get here, we need to allocate a NEW row number.
 	// Since we already hold a dictionary lock, we don't need another
 	tValue = tVBDataCountGetNext (iHandle);
 	return (tValue);
+}
+
+/*
+ * Name:
+ *	int	iVBForceDataAllocate (int iHandle, off_t tRowNumber);
+ * Arguments:
+ *	int	iHandle
+ *		The open file descriptor of the VBISAM file (Not the idx file)
+ *	off_t	tRowNumber
+ *		The data row number that we *MUST* allocate
+ * Prerequisites:
+ *	NONE
+ * Returns:
+ *	0	Success
+ *	Other	Failed
+ * Problems:
+ *	NONE known
+ */
+int
+iVBForceDataAllocate (int iHandle, off_t tRowNumber)
+{
+	int	iLoop,
+		iLengthUsed;
+	off_t	tHeadNode,
+		tPrevNode,
+		tNextNode;
+
+	// Sanity check - Is iHandle a currently open table?
+	iserrno = ENOTOPEN;
+	if (!psVBFile [iHandle])
+		return (-1);
+	iserrno = EBADARG;
+	if (!psVBFile [iHandle]->sFlags.iIsDictLocked)
+		return (-1);
+	iserrno = 0;
+
+	// Test 1: Is it already beyond EOF (the SIMPLE test)
+	tHeadNode = ldquad (psVBFile [iHandle]->sDictNode.cDataCount);
+	if (tHeadNode < tRowNumber)
+	{
+		psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
+		stquad (tRowNumber, psVBFile [iHandle]->sDictNode.cDataCount);
+		tHeadNode++;
+		while (tHeadNode < tRowNumber)
+		{
+			if (tHeadNode != 0)
+				iVBDataFree (iHandle, tHeadNode);
+			tHeadNode++;
+		}
+		return (0);
+	}
+	// <SIGH> It SHOULD be *SOMEWHERE* in the data free list!
+	tPrevNode = 0;
+	tHeadNode = ldquad (psVBFile [iHandle]->sDictNode.cDataFree);
+	while (tHeadNode != (off_t) 0)
+	{
+		iserrno = iVBBlockRead (iHandle, TRUE, tHeadNode, cVBNode [0]);
+		if (iserrno)
+			return (-1);
+		iserrno = EBADFILE;
+		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 2] != 0x7f)
+			return (-1);
+		if (cVBNode [0] [psVBFile [iHandle]->iNodeSize - 3] != -1)
+			return (-1);
+		iLengthUsed = ldint (cVBNode [0]);
+		for (iLoop = INTSIZE + QUADSIZE; iLoop < iLengthUsed; iLoop += QUADSIZE)
+		{
+			if (ldquad (&cVBNode [0] [iLoop]) == tRowNumber)
+			{	// Found the bitch! Now to extract her
+				memcpy (&(cVBNode [0] [iLoop]), &(cVBNode [0] [iLoop + QUADSIZE]), iLengthUsed - iLoop);
+				iLengthUsed -= QUADSIZE;
+				if (iLengthUsed > INTSIZE + QUADSIZE)
+				{
+					stquad (0, &cVBNode [0] [iLengthUsed]);
+					stint (iLengthUsed, cVBNode [0]);
+					return (iVBBlockWrite (iHandle, TRUE, tHeadNode, cVBNode [0]));
+				}
+				else
+				{	// CRAP It was the last one in the node!
+					tNextNode = ldquad (&cVBNode [0] [INTSIZE]);
+					if (tPrevNode)
+					{
+						iserrno = iVBBlockRead (iHandle, TRUE, tPrevNode, cVBNode [0]);
+						if (iserrno)
+							return (-1);
+						stquad (tNextNode, &cVBNode [0] [INTSIZE]);
+						return (iVBBlockWrite (iHandle, TRUE, tPrevNode, cVBNode [0]));
+					}
+					else
+					{
+						psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
+						stquad (tNextNode, psVBFile [iHandle]->sDictNode.cDataFree);
+					}
+					return (iVBNodeFree (iHandle, tHeadNode));
+				}
+			}
+		}
+		tPrevNode = tHeadNode;
+		tHeadNode = ldquad (&cVBNode [0] [INTSIZE]);
+	}
+	// If we get here, we've got a MAJOR integrity error in that the
+	// nominated row number was simply *NOT FREE*
+	iserrno = EBADFILE;
+	return (-1);
 }

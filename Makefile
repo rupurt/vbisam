@@ -5,9 +5,12 @@
 # Description:
 #	This is the main makefile that BUILDS all this stuff (I hope)
 # Version:
-#	$Id: Makefile,v 1.7 2004/03/23 21:55:55 trev_vb Exp $
+#	$Id: Makefile,v 1.8 2004/06/06 20:52:21 trev_vb Exp $
 # Modification History:
 #	$Log: Makefile,v $
+#	Revision 1.8  2004/06/06 20:52:21  trev_vb
+#	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
+#	
 #	Revision 1.7  2004/03/23 21:55:55  trev_vb
 #	TvB 23Mar2004 Endian on SPARC (Phase I).  Makefile changes for SPARC.
 #	
@@ -38,8 +41,6 @@ SLB	= /usr/lib/lib$(LIB).so
 # ===========
 # -fPIC		Seems to be needed to build libraries on MANY systems
 # -DEBUG:	Includes some (useful?) debugging functions
-# -DDEV:	Forces node size to 256 bytes
-#		Otherwise uses 1kB (32bit versions) or 4kB (64bit versions)
 # -O3 -s:	Optimizes code and strips symbols (Better / Faster code?)
 # -g:		Produces code with which gdb can be used
 # -pg:		Generate gprof-able code
@@ -48,9 +49,9 @@ SLB	= /usr/lib/lib$(LIB).so
 # ****************************************************************************
 CC	= gcc
 CFLAGS	= -fPIC -Wall -DDEBUG -O3 -s -D_FILE_OFFSET_BITS=64
-CFLAGS	= -fPIC -Wall -DDEV -DDEBUG -D_FILE_OFFSET_BITS=64 -pg -g
-CFLAGS	= -fPIC -Wall -DDEBUG -pg -g
+CFLAGS	= -fPIC -Wall -DDEBUG -D_FILE_OFFSET_BITS=64 -pg -g
 CFLAGS	= -fPIC -Wall -DDEBUG -O3 -s
+CFLAGS	= -fPIC -Wall -DDEBUG -pg -g
 CFLAGS	= -fPIC -Wall -pg -g
 CFLAGS	= -fPIC -Wall -O3 -s
 
@@ -62,19 +63,22 @@ SRCS	= \
 	isdelete.c \
 	isopen.c \
 	isread.c \
+	isrecover.c \
 	isrewrite.c \
 	istrans.c \
 	iswrite.c \
+	vbBlockIO.c \
 	vbDataIO.c \
 	vbIndexIO.c \
 	vbKeysIO.c \
 	vbLocking.c \
 	vbLowLevel.c \
 	vbMemIO.c \
+	vbNodeMemIO.c \
 	vbVarLenIO.c
 OBJS	= ${SRCS:.c=.o}
 
-all:	${ALB} ${SLB} JvNTest IsamTest
+all:	${ALB} ${SLB} vbCheck vbRecover MVTest
 
 .o:
 	$(CC) $(CFLAGS) -o $@ $< -l$(LIB)
@@ -88,9 +92,17 @@ ${SLB}:	${OBJS} Makefile
 clean:
 	rm -f *.o
 
-JvNTest:	JvNTest.o ${SLB}
+vbCheck:	vbCheck.o ${SLB}
 
-JvNTest.o:	JvNTest.c ${DEPS}
+vbCheck.o:	vbCheck.c ${DEPS}
+
+vbRecover:	vbRecover.o ${SLB}
+
+vbRecover.o:	vbRecover.c ${DEPS}
+
+MVTest:		MVTest.o ${SLB}
+
+MVTest.o:	MVTest.c ${DEPS}
 
 CvtTo64:	CvtTo64.o $(SLB)
 
@@ -104,6 +116,8 @@ isDecimal.o:	isDecimal.c $(DEPS) decimal.h
 
 isHelper.o:	isHelper.c $(DEPS)
 
+isaudit.o:	isaudit.c $(DEPS)
+
 isbuild.o:	isbuild.c $(DEPS)
 
 isdelete.o:	isdelete.c $(DEPS)
@@ -112,11 +126,15 @@ isopen.o:	isopen.c $(DEPS)
 
 isread.o:	isread.c $(DEPS)
 
+isrecover.o:	isrecover.c $(DEPS)
+
 isrewrite.o:	isrewrite.c $(DEPS)
 
 istrans.o:	istrans.c $(DEPS)
 
 iswrite.o:	iswrite.c $(DEPS)
+
+vbBlockIO.o:	vbBlockIO.c $(DEPS)
 
 vbDataIO.o:	vbDataIO.c $(DEPS)
 
@@ -129,4 +147,8 @@ vbLocking.o:	vbLocking.c $(DEPS)
 vbLowLevel.o:	vbLowLevel.c $(DEPS)
 
 vbMemIO.o:	vbMemIO.c $(DEPS)
+
+vbNodeMemIO.o:	vbNodeMemIO.c $(DEPS)
+
+vbVarlenIO.o:	vbVarlenIO.c $(DEPS)
 

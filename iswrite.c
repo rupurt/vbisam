@@ -8,9 +8,12 @@
  *	This is the module that deals with all the writing to a file in the
  *	VBISAM library.
  * Version:
- *	$Id: iswrite.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
+ *	$Id: iswrite.c,v 1.6 2004/06/06 20:52:21 trev_vb Exp $
  * Modification History:
  *	$Log: iswrite.c,v $
+ *	Revision 1.6  2004/06/06 20:52:21  trev_vb
+ *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
+ *	
  *	Revision 1.5  2004/01/06 14:31:59  trev_vb
  *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
  *	
@@ -36,6 +39,7 @@
 int	iswrcurr (int, char *);
 int	iswrite (int, char *);
 int	iVBWriteRow (int, char *, off_t);
+static	int	iRowInsert (int, char *, off_t);
 
 /*
  * Name:
@@ -70,13 +74,15 @@ iswrcurr (int iHandle, char *pcRow)
 		return (-1);
 	}
 
-	tRowNumber = tVBDataCountGetNext (iHandle);
+	tRowNumber = tVBDataAllocate (iHandle);
 	if (tRowNumber == -1)
 		return (-1);
 
 	iResult = iVBWriteRow (iHandle, pcRow, tRowNumber);
 	if (!iResult)
 		psVBFile [iHandle]->tRowNumber = tRowNumber;
+	else
+		iVBDataFree (iHandle, tRowNumber);
 
 	iVBExit (iHandle);
 	return (iResult);
@@ -101,7 +107,8 @@ iswrcurr (int iHandle, char *pcRow)
 int
 iswrite (int iHandle, char *pcRow)
 {
-	int	iResult;
+	int	iResult,
+		iSaveError;
 	off_t	tRowNumber;
 
 	iResult = iVBEnter (iHandle, TRUE);
@@ -114,11 +121,17 @@ iswrite (int iHandle, char *pcRow)
 		return (-1);
 	}
 
-	tRowNumber = tVBDataCountGetNext (iHandle);
+	tRowNumber = tVBDataAllocate (iHandle);
 	if (tRowNumber == -1)
 		return (-1);
 
 	iResult = iVBWriteRow (iHandle, pcRow, tRowNumber);
+	if (iResult)
+	{
+		iSaveError = iserrno;
+		iVBDataFree (iHandle, tRowNumber);
+		iserrno = iSaveError;
+	}
 
 	iVBExit (iHandle);
 	return (iResult);
@@ -148,22 +161,102 @@ iVBWriteRow (int iHandle, char *pcRow, off_t tRowNumber)
 	int	iResult = 0;
 
 	isrecnum = tRowNumber;
-	if (iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
-		iResult = iVBDataLock (iHandle, VBWRLOCK, tRowNumber, TRUE);
+	if (psVBFile [iHandle]->iOpenMode & ISTRANS)
+	{
+		iserrno = iVBDataLock (iHandle, VBWRLOCK, tRowNumber, TRUE);
+		if (iserrno)
+			return (-1);
+	}
+	iResult = iRowInsert (iHandle, pcRow, tRowNumber);
 	if (!iResult)
 	{
+		iserrno = 0;
 		psVBFile [iHandle]->tVarlenNode = 0;	// Stop it from removing
 		iResult = iVBDataWrite (iHandle, (void *) pcRow, FALSE, tRowNumber, TRUE);
+		if (iResult)
+		{
+			iserrno = iResult;
+			iVBDataLock (iHandle, VBUNLOCK, tRowNumber, TRUE);
+			return (-1);
+		}
 	}
-	if (iResult)
-	{
-		iserrno = iResult;
-		return (-1);
-	}
-	iResult = iVBRowInsert (iHandle, pcRow, tRowNumber);
-	if (!iResult && iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
-		iResult = iVBTransInsert (iHandle, tRowNumber, isreclen, pcRow);
 	if (!iResult)
-		iserrno = 0;
+		iResult = iVBTransInsert (iHandle, tRowNumber, isreclen, pcRow);
+	else
+		iVBDataLock (iHandle, VBUNLOCK, tRowNumber, TRUE);
 	return (iResult);
+}
+
+/*
+ * Name:
+ *	static	int	iRowInsert (int iHandle, char *pcRowBuffer, off_t tRowNumber);
+ * Arguments:
+ *	int	iHandle
+ *		The open file descriptor of the VBISAM file (Not the dat file)
+ *	char	*pcRowBuffer
+ *		A pointer to the buffer containing the row to be added
+ *	off_t	tRowNumber
+ *		The absolute row number of the row to be added
+ * Prerequisites:
+ *	NONE
+ * Returns:
+ *	-1	Failure (iserrno contains more info)
+ *	0	Success
+ * Problems:
+ *	NONE known
+ */
+static	int
+iRowInsert (int iHandle, char *pcRowBuffer, off_t tRowNumber)
+{
+	char	cKeyValue [VB_MAX_KEYLEN];
+	int	iKeyNumber,
+		iResult;
+	struct	VBKEY
+		*psKey;
+	off_t	tDupNumber [MAXSUBS];
+
+	/*
+	 * Step 1:
+	 *	Check each index for a potential ISNODUPS error (EDUPL)
+	 *	Also, calculate the duplicate number as needed
+	 */
+	for (iKeyNumber = 0; iKeyNumber < psVBFile [iHandle]->iNKeys; iKeyNumber++)
+	{
+		if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iNParts == 0)
+			continue;
+		vVBMakeKey (iHandle, iKeyNumber, pcRowBuffer, cKeyValue);
+		iResult = iVBKeySearch (iHandle, ISGREAT, iKeyNumber, 0, cKeyValue, 0);
+		tDupNumber [iKeyNumber] = 0;
+		if (iResult >= 0 && !iVBKeyLoad (iHandle, iKeyNumber, ISPREV, FALSE, &psKey) && !memcmp (psKey->cKey, cKeyValue, psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength))
+		{
+			iserrno = EDUPL;
+			if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iFlags & ISDUPS)
+				tDupNumber [iKeyNumber] = psKey->tDupNumber + 1;
+			else
+				return (-1);
+		}
+		iResult = iVBKeySearch (iHandle, ISGTEQ, iKeyNumber, 0, cKeyValue, tDupNumber [iKeyNumber]);
+	}
+
+	// Step 2: Perform the actual insertion into each index
+	for (iKeyNumber = 0; iKeyNumber < psVBFile [iHandle]->iNKeys; iKeyNumber++)
+	{
+		if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iNParts == 0)
+			continue;
+		vVBMakeKey (iHandle, iKeyNumber, pcRowBuffer, cKeyValue);
+		iResult = iVBKeyInsert (iHandle, VBTREE_NULL, iKeyNumber, cKeyValue, tRowNumber, tDupNumber [iKeyNumber], VBTREE_NULL);
+		if (iResult)
+		{
+// BUG - do something SANE here
+		// Eeek, an error occured.  Let's remove what we added
+			//while (iKeyNumber >= 0)
+			//{
+				//iVBKeyDelete (iHandle, iKeyNumber);
+				//iKeyNumber--;
+			//}
+			return (iResult);
+		}
+	}
+
+	return (0);
 }

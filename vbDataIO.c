@@ -8,9 +8,12 @@
  *	This module handles ALL the low level data file I/O operations for the
  *	VBISAM library.
  * Version:
- *	$Id: vbDataIO.c,v 1.6 2004/01/06 14:31:59 trev_vb Exp $
+ *	$Id: vbDataIO.c,v 1.7 2004/06/06 20:52:21 trev_vb Exp $
  * Modification History:
  *	$Log: vbDataIO.c,v $
+ *	Revision 1.7  2004/06/06 20:52:21  trev_vb
+ *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
+ *	
  *	Revision 1.6  2004/01/06 14:31:59  trev_vb
  *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
  *	
@@ -33,8 +36,6 @@
  *	
  */
 #include	"isinternal.h"
-
-static	char	cNode0 [MAX_NODE_LENGTH];
 
 /*
  * Prototypes
@@ -94,23 +95,23 @@ iVBDataRead (int iHandle, void *pvBuffer, int *piDeletedRow, off_t tRowNumber, i
 	tOffset = iRowLength * (tRowNumber - 1);
 	tBlockNumber = (tOffset / psVBFile [iHandle]->iNodeSize);
 	tOffset -= (tBlockNumber * psVBFile [iHandle]->iNodeSize);
-	if (iVBBlockRead (iHandle, FALSE, tBlockNumber + 1, cNode0))
+	if (iVBBlockRead (iHandle, FALSE, tBlockNumber + 1, cVBNode [0]))
 		return (EBADFILE);
 	// Read in the *MINIMUM* rowlength and store it into pvBuffer
 	while (tSoFar < psVBFile [iHandle]->iMinRowLength)
 	{
 		if ((psVBFile [iHandle]->iMinRowLength - tSoFar) < (psVBFile [iHandle]->iNodeSize - tOffset))
 		{
-			memcpy (pvBuffer + tSoFar, cNode0 + tOffset, psVBFile [iHandle]->iMinRowLength - tSoFar);
+			memcpy (pvBuffer + tSoFar, cVBNode [0] + tOffset, psVBFile [iHandle]->iMinRowLength - tSoFar);
 			tOffset += psVBFile [iHandle]->iMinRowLength - tSoFar;
 			tSoFar = psVBFile [iHandle]->iMinRowLength;
 			break;
 		}
-		memcpy (pvBuffer + tSoFar, cNode0 + tOffset, psVBFile [iHandle]->iNodeSize - tOffset);
+		memcpy (pvBuffer + tSoFar, cVBNode [0] + tOffset, psVBFile [iHandle]->iNodeSize - tOffset);
 		tBlockNumber++;
 		tSoFar += psVBFile [iHandle]->iNodeSize - tOffset;
 		tOffset = 0;
-		if (iVBBlockRead (iHandle, FALSE, tBlockNumber + 1, cNode0))
+		if (iVBBlockRead (iHandle, FALSE, tBlockNumber + 1, cVBNode [0]))
 			return (EBADFILE);
 	}
 	pvBuffer += tSoFar;
@@ -119,14 +120,14 @@ iVBDataRead (int iHandle, void *pvBuffer, int *piDeletedRow, off_t tRowNumber, i
 	{
 		if ((iRowLength - tSoFar) <= (psVBFile [iHandle]->iNodeSize - tOffset))
 		{
-			memcpy (cFooter + tSoFar - psVBFile [iHandle]->iMinRowLength, cNode0 + tOffset, iRowLength - tSoFar);
+			memcpy (cFooter + tSoFar - psVBFile [iHandle]->iMinRowLength, cVBNode [0] + tOffset, iRowLength - tSoFar);
 			break;
 		}
-		memcpy (cFooter + tSoFar - psVBFile [iHandle]->iMinRowLength, cNode0 + tOffset, psVBFile [iHandle]->iNodeSize - tOffset);
+		memcpy (cFooter + tSoFar - psVBFile [iHandle]->iMinRowLength, cVBNode [0] + tOffset, psVBFile [iHandle]->iNodeSize - tOffset);
 		tBlockNumber++;
 		tSoFar += psVBFile [iHandle]->iNodeSize - tOffset;
 		tOffset = 0;
-		if (iVBBlockRead (iHandle, FALSE, tBlockNumber + 1, cNode0))
+		if (iVBBlockRead (iHandle, FALSE, tBlockNumber + 1, cVBNode [0]))
 			return (EBADFILE);
 	}
 	isreclen = psVBFile [iHandle]->iMinRowLength;
@@ -202,8 +203,6 @@ iVBDataWrite (int iHandle, void *pvBuffer, int iDeletedRow, off_t tRowNumber, in
 	if (!psVBFile [iHandle])
 		return (ENOTOPEN);
 
-	// BUG? - Should we be allowed to write if the handle is open ISINPUT?
-
 	iRowLength = psVBFile [iHandle]->iMinRowLength;
 	tOffset = iRowLength + 1;
 	if (psVBFile [iHandle]->iOpenMode & ISVARLEN)
@@ -244,17 +243,17 @@ iVBDataWrite (int iHandle, void *pvBuffer, int iDeletedRow, off_t tRowNumber, in
 	tOffset -= (tBlockNumber * psVBFile [iHandle]->iNodeSize);
 	while (tSoFar < iRowLength)
 	{
-		memset (cNode0, 0, MAX_NODE_LENGTH);
-		iVBBlockRead (iHandle, FALSE, tBlockNumber + 1, cNode0);	// Can fail!!
+		memset (cVBNode [0], 0, MAX_NODE_LENGTH);
+		iVBBlockRead (iHandle, FALSE, tBlockNumber + 1, cVBNode [0]);	// Can fail!!
 		if ((iRowLength - tSoFar) <= (psVBFile [iHandle]->iNodeSize - tOffset))
 		{
-			memcpy (cNode0 + tOffset, pcWriteBuffer + tSoFar, iRowLength - tSoFar);
-			if (iVBBlockWrite (iHandle, FALSE, tBlockNumber + 1, cNode0))
+			memcpy (cVBNode [0] + tOffset, pcWriteBuffer + tSoFar, iRowLength - tSoFar);
+			if (iVBBlockWrite (iHandle, FALSE, tBlockNumber + 1, cVBNode [0]))
 				return (EBADFILE);
 			break;
 		}
-		memcpy (cNode0 + tOffset, pvBuffer + tSoFar, psVBFile [iHandle]->iNodeSize - tOffset);
-		if (iVBBlockWrite (iHandle, FALSE, tBlockNumber + 1, cNode0))
+		memcpy (cVBNode [0] + tOffset, pvBuffer + tSoFar, psVBFile [iHandle]->iNodeSize - tOffset);
+		if (iVBBlockWrite (iHandle, FALSE, tBlockNumber + 1, cVBNode [0]))
 			return (EBADFILE);
 		tBlockNumber++;
 		tSoFar += psVBFile [iHandle]->iNodeSize - tOffset;

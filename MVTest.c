@@ -1,0 +1,214 @@
+/*
+ * Title:	MVTest.c
+ * Copyright:	(C) 2004 Mikhail Verkhovski
+ * License:	LGPL - See COPYING.LIB
+ * Author:	Mikhail Verkhovski
+ * Created:	??May2004
+ * Description:
+ *	This module tests a bunch of the features of VBISAM
+ * Version:
+ *	$Id: MVTest.c,v 1.1 2004/06/06 20:52:21 trev_vb Exp $
+ * Modification History:
+ *	$Log: MVTest.c,v $
+ *	Revision 1.1  2004/06/06 20:52:21  trev_vb
+ *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
+ *	
+ *	TvB 30May2004 Many thanks go out to MV for writing this test program
+ */
+#include	<time.h>
+#include	<sys/types.h>
+#include	<stdlib.h>
+#include	<stdio.h>
+#include	"vbisam.h"
+#include	"isinternal.h"
+
+int	iVBRdCount = 0,
+	iVBWrCount = 0,
+	iVBDlCount = 0,
+	iVBUpCount = 0;
+int
+main (int iArgc, char **ppcArgv)
+{
+	int	iResult,
+		iLoop,
+		iLoop2,
+		iHandle;
+	unsigned char
+		cRecord [100];
+	struct	keydesc
+		sKeydesc;
+	char	cLogfileName [100],
+		cCommand [100];
+	char	cFileName [] = "IsamTest";
+
+	memset (&sKeydesc, 0, sizeof (sKeydesc));
+	isreclen = 100;
+	sKeydesc.k_flags = COMPRESS;
+	sKeydesc.k_nparts = 1;
+	sKeydesc.k_start = 0;
+	sKeydesc.k_leng = 2;
+	sKeydesc.k_type = CHARTYPE;
+
+	if (iArgc == 1)
+	{
+		printf ("Usage:\n\t%s create\nOR\n\t%s <#iterations>\n", ppcArgv [0], ppcArgv [0]);
+		exit (1);
+	}
+
+	if (iArgc > 1 && strcmp (ppcArgv [1], "create") == 0)
+	{
+		iserase (cFileName);
+		iHandle = isbuild (cFileName, 100, &sKeydesc, ISINOUT+ISFIXLEN+ISAUTOLOCK);
+		if (iHandle < 0)
+		{
+			fprintf (stdout, "Error creating database: %d\n", iserrno);
+			exit (-1);
+		}
+		isclose (iHandle);
+		return (0);
+	}
+	// The following is sort of cheating as it *assumes* we're running *nix
+	// However, I have to admit to liking the fact that this will FAIL when
+	// using WynDoze (TvB)
+	sprintf (cLogfileName, "RECOVERY.LOG");
+	sprintf (cCommand, "rm -f %s; touch %s", cLogfileName, cLogfileName);
+	system (cCommand);
+	iResult = islogopen (cLogfileName);
+	if (iResult < 0)
+	{
+		fprintf (stdout, "Error opening log: %d\n", iserrno);
+		exit (-1);
+	}
+
+	srand (time (NULL));
+	for (iLoop = 0; iLoop < atoi (ppcArgv [1]); iLoop++)
+	{
+		if (!(iLoop % 100))
+			printf ("iLoop=%d\n", iLoop);
+
+		iResult = isbegin ();
+		if (iResult < 0)
+		{
+			fprintf (stdout, "Error begin transaction: %d\n", iserrno);
+			exit (-1);
+		}
+		iHandle = isopen (cFileName, ISINOUT+ISFIXLEN+ISTRANS+ISAUTOLOCK);
+		if (iHandle < 0)
+		{
+			fprintf (stdout, "Error opening database: %d\n", iserrno);
+			exit (-1);
+		}
+
+		for (iLoop2 = 0; iLoop2 < 100; iLoop2++)
+		{
+			cRecord [0] = rand () % 256;
+			cRecord [1] = rand () % 256;
+			memset (cRecord+2, rand () % 256, 100 - 2);
+
+			switch (rand () % 4)
+			{
+			case	0:
+				if ((iResult = iswrite (iHandle, (char *) cRecord)) != 0)
+				{
+					if (iserrno != EDUPL && iserrno != ELOCKED)
+					{
+						fprintf (stdout, "Error writing: %d\n", iserrno);
+						goto err;
+					}
+				}
+				else
+					iVBWrCount++;
+				break;
+
+			case	1:
+				if ((iResult = isread (iHandle, (char *)cRecord, ISEQUAL)) != 0)
+				{
+					if (iserrno == ELOCKED)
+						; //fprintf (stdout, "Locked during deletion\n");
+					else if (iserrno != ENOREC)
+					{
+						fprintf (stdout, "Error reading: %d\n", iserrno);
+						goto err;
+					}
+				}
+				else
+					iVBRdCount++;
+				break;
+
+			case	2:
+				cRecord [0] = rand () % 256;
+				cRecord [1] = rand () % 256;
+cRecord [1] = 'A';
+				if ((iResult = isrewrite (iHandle, (char *)cRecord)) != 0)
+				{
+					if (iserrno == ELOCKED)
+						; //fprintf (stdout, "Locked during rewrite\n");
+					else if (iserrno != ENOREC)
+					{
+						fprintf (stdout, "Error rewriting: %d\n", iserrno);
+						goto err;
+					}
+				}
+				else
+					iVBUpCount++;
+				break;
+
+			case	3:
+				if ((iResult = isdelete (iHandle, (char *)cRecord)) != 0)
+				{
+					if (iserrno == ELOCKED)
+						; //fprintf (stdout, "Locked during deletion\n");
+					else if (iserrno != ENOREC)
+					{
+						fprintf (stdout, "Error deleting: %d\n", iserrno);
+						goto err;
+					}
+				}
+				else
+					iVBDlCount++;
+				break;
+			}
+		}
+
+		iResult = isflush (iHandle);
+		if (iResult < 0)
+		{
+			fprintf (stdout, "Error flush: %d\n", iserrno);
+			exit (-1);
+		}
+		iResult = isclose (iHandle);
+		if (iResult < 0)
+		{
+			fprintf (stdout, "Error closing database: %d\n", iserrno);
+			exit (-1);
+		}
+
+		switch (rand () % 2)
+		{
+		case	0:
+			iResult = iscommit ();
+			if (iResult < 0)
+			{
+				fprintf (stdout, "Error commit: %d\n", iserrno);
+				exit (-1);
+			}
+			break;
+
+		case	1:
+			iResult = isrollback ();
+			if (iResult < 0)
+			{
+				fprintf (stdout, "Error rollback: %d\n", iserrno);
+				exit (-1);
+			}
+			break;
+		}
+	}
+err:
+	printf ("Note:\n\tThe following figures include those that were rolled back!\n\tTherefore, you cannot sum them to match the file content!\n");
+	printf ("Write  Count: %d\n", iVBWrCount);
+	printf ("Read   Count: %d\n", iVBRdCount);
+	printf ("Delete Count: %d\n", iVBDlCount);
+	printf ("Update Count: %d\n", iVBUpCount);
+	return (iResult);
+}

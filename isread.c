@@ -8,9 +8,12 @@
  *	This is the module that deals with all the reading from a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isread.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
+ *	$Id: isread.c,v 1.6 2004/06/06 20:52:21 trev_vb Exp $
  * Modification History:
  *	$Log: isread.c,v $
+ *	Revision 1.6  2004/06/06 20:52:21  trev_vb
+ *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
+ *	
  *	Revision 1.5  2004/01/06 14:31:59  trev_vb
  *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
  *	
@@ -35,6 +38,7 @@
  */
 int	isread (int, char *, int);
 int	isstart (int, struct keydesc *, int, char *, int);
+int	iVBCheckKey (int, struct keydesc *, int, int, int);
 static	int	iStartRowNumber (int, int, int);
 
 /*
@@ -144,13 +148,32 @@ isread (int iHandle, char *pcRow, int iMode)
 
 	case	ISEQUAL:
 		vVBMakeKey (iHandle, iKeyNumber, pcRow, cKeyValue);
-		iResult = iVBKeySearch (iHandle, iReadMode, iKeyNumber, 0, cKeyValue, 0);
+		iResult = iVBKeySearch (iHandle, ISGTEQ, iKeyNumber, 0, cKeyValue, 0);
 		if (iResult == -1)		// Error
 			break;
 		if (iResult == 1)	// Found it!
 			iResult = 0;
 		else
-			iserrno = ENOREC;
+		{
+			if (psVBFile [iHandle]->psKeyCurr [iKeyNumber]->sFlags.iIsDummy)
+			{
+				iResult = iVBKeyLoad (iHandle, iKeyNumber, ISNEXT, TRUE, &psKey);
+				if (iResult == EENDFILE)
+				{
+					iResult = -1;
+					iserrno = ENOREC;
+					break;
+				}
+				iserrno = 0;
+			}
+			if (memcmp (cKeyValue, psVBFile [iHandle]->psKeyCurr [iKeyNumber]->cKey, psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength))
+			{
+				iResult = -1;
+				iserrno = ENOREC;
+			}
+			else
+				iResult = 0;
+		}
 		break;
 
 	case	ISGREAT:
@@ -264,6 +287,7 @@ isread (int iHandle, char *pcRow, int iMode)
 	}
 
 ReadExit:
+	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x04;
 	iVBExit (iHandle);
 	return (iResult);
 }
@@ -404,8 +428,140 @@ isstart (int iHandle, struct keydesc *psKeydesc, int iLength, char *pcRow, int i
 		iResult = -1;
 	}
 StartExit:
+	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x04;
 	iVBExit (iHandle);
 	return (iResult);
+}
+
+/*
+ * Name:
+ *	int	iVBCheckKey (int iHandle, struct keydesc *psKey, int iMode, int iRowLength, int iIsBuild);
+ * Arguments:
+ *	int	iHandle
+ *		The open file descriptor of the VBISAM file (Not the dat file)
+ *	struct	keydesc	*psKey
+ *		The key description to be tested
+ *	int	iMode
+ *		0 - Test whether the key is 'valid' (Uses iRowLength)
+ *		1 - Test whether the key is 'valid' and not already present
+ *		2 - Test whether the key already exists
+ *	int	iRowLength
+ *		Only used when iMode = 0.  The minimum length of a row in bytes
+ *	int	iIsBuild
+ *		If non-zero, this allows isbuild to create a NULL primary key
+ * Prerequisites:
+ *	NONE
+ * Returns:
+ *	-1	Failure (iserrno contains more info)
+ *	If iMode == 0
+ *		0	Success (Passed the test in iMode)
+ *	If iMode != 0
+ *		n	Where n is the key number that matched
+ * Problems:
+ *	NONE known
+ */
+int
+iVBCheckKey (int iHandle, struct keydesc *psKey, int iMode, int iRowLength, int iIsBuild)
+{
+	int	iLoop,
+		iPart,
+		iType;
+	struct	keydesc
+		*psLocalKey;
+
+	if (iMode)
+		iRowLength = psVBFile [iHandle]->iMinRowLength;
+	if (iMode < 2)
+	{
+	// Basic key validity test
+		psKey->iKeyLength = 0;
+		if (psKey->iFlags < 0 || psKey->iFlags > COMPRESS + ISDUPS)
+			goto VBCheckKeyExit;
+		if (psKey->iNParts >= NPARTS || psKey->iNParts < 0)
+			goto VBCheckKeyExit;
+		if (psKey->iNParts == 0 && !iIsBuild)
+			goto VBCheckKeyExit;
+		for (iPart = 0; iPart < psKey->iNParts; iPart++)
+		{
+		// Wierdly enough, a single keypart CAN span multiple instances
+		// EG: Part number 1 might contain 4 long values
+			psKey->iKeyLength += psKey->sPart [iPart].iLength;
+			if (psKey->iKeyLength > VB_MAX_KEYLEN)
+				goto VBCheckKeyExit;
+			iType = psKey->sPart [iPart].iType & ~ ISDESC;
+			switch (iType)
+			{
+			case	CHARTYPE:
+				break;
+
+			case	INTTYPE:
+				if (psKey->sPart [iPart].iLength % INTSIZE)
+					goto VBCheckKeyExit;
+				break;
+
+			case	LONGTYPE:
+				if (psKey->sPart [iPart].iLength % LONGSIZE)
+					goto VBCheckKeyExit;
+				break;
+
+			case	QUADTYPE:
+				if (psKey->sPart [iPart].iLength % QUADSIZE)
+					goto VBCheckKeyExit;
+				break;
+
+			case	FLOATTYPE:
+				if (psKey->sPart [iPart].iLength % FLOATSIZE)
+					goto VBCheckKeyExit;
+				break;
+
+			case	DOUBLETYPE:
+				if (psKey->sPart [iPart].iLength % DOUBLESIZE)
+					goto VBCheckKeyExit;
+				break;
+
+			default:
+				goto VBCheckKeyExit;
+			}
+			if (psKey->sPart [iPart].iStart + psKey->sPart [iPart].iLength > iRowLength)
+				goto VBCheckKeyExit;
+			if (psKey->sPart [iPart].iStart < 0)
+				goto VBCheckKeyExit;
+		}
+		if (!iMode)
+			return (0);
+	}
+
+	// Check whether the key already exists
+	for (iLoop = 0; iLoop < psVBFile [iHandle]->iNKeys; iLoop++)
+	{
+		psLocalKey = psVBFile [iHandle]->psKeydesc [iLoop];
+		if (psLocalKey->iNParts != psKey->iNParts)
+			continue;
+		for (iPart = 0; iPart < psLocalKey->iNParts; iPart++)
+		{
+			if (psLocalKey->sPart [iPart].iStart != psKey->sPart [iPart].iStart)
+				break;
+			if (psLocalKey->sPart [iPart].iLength != psKey->sPart [iPart].iLength)
+				break;
+			if (psLocalKey->sPart [iPart].iType != psKey->sPart [iPart].iType)
+				break;
+		}
+		if (iPart == psLocalKey->iNParts)
+			break;		/* found */
+	}
+	if (iLoop == psVBFile [iHandle]->iNKeys)
+	{
+		if (iMode == 2)
+			goto VBCheckKeyExit;
+		return (iLoop);
+	}
+	if (iMode == 1)
+		goto VBCheckKeyExit;
+	return (iLoop);
+
+VBCheckKeyExit:
+	iserrno = EBADKEY;
+	return (-1);
 }
 
 static	int

@@ -7,9 +7,12 @@
  * Description:
  *	This module handles ALL the key manipulation for the VBISAM library.
  * Version:
- *	$Id: vbKeysIO.c,v 1.8 2004/03/23 15:13:19 trev_vb Exp $
+ *	$Id: vbKeysIO.c,v 1.9 2004/06/06 20:52:21 trev_vb Exp $
  * Modification History:
  *	$Log: vbKeysIO.c,v $
+ *	Revision 1.9  2004/06/06 20:52:21  trev_vb
+ *	06Jun2004 TvB Lots of changes! Performance, stability, bugfixes.  See CHANGELOG
+ *	
  *	Revision 1.8  2004/03/23 15:13:19  trev_vb
  *	TvB 23Mar2004 Changes made to fix bugs highlighted by JvN's test suite.  Many thanks go out to JvN for highlighting my obvious mistakes.
  *	
@@ -42,421 +45,20 @@
 /*
  * Prototypes
  */
-int	iVBCheckKey (int, struct keydesc *, int, int, int);
-int	iVBRowInsert (int, char *, off_t);
-int	iVBRowDelete (int, off_t);
-int	iVBRowUpdate (int, char *, off_t);
 void	vVBMakeKey (int, int, char *, char *);
 int	iVBKeySearch (int, int, int, int, char *, off_t);
 int	iVBKeyLocateRow (int, int, off_t);
 int	iVBKeyLoad (int, int, int, int, struct VBKEY **);
-int	iVBMakeKeysFromData (int, int);
-int	iVBDelNodes (int, int, off_t);
-static	int	iKeyCompare (int, int, int, unsigned char *, unsigned char *);
+void	vVBKeyValueSet (int, struct keydesc *, char *);
+int	iVBKeyInsert (int, struct VBTREE *, int, char *, off_t, off_t, struct VBTREE *);
+int	iVBKeyDelete (int, int);
+int	iVBKeyCompare (int, int, int, unsigned char *, unsigned char *);
 static	int	iTreeLoad (int, int, int, char *, off_t);
-static	int	iNodeLoad (int, int, struct VBTREE *, off_t, int);
-static	int	iNodeSave (int, int, struct VBTREE *, off_t);
-static	int	iNodeSplit (int, int, struct VBTREE *, struct VBKEY *);
-static	int	iNewRoot (int, int, struct VBTREE *, struct VBTREE *, struct VBTREE *, struct VBKEY *[], off_t, off_t);
-static	int	iKeyInsert (int, struct VBTREE *, int, char *, off_t, off_t, struct VBTREE *);
-static	int	iKeyDelete (int, int);
-static	void	vLowValueKeySet (struct keydesc *, char *);
-static	void	vHighValueKeySet (struct keydesc *, char *);
 #ifdef	DEBUG
 void	vDumpKey (struct VBKEY *, struct VBTREE *, int);
 void	vDumpTree (struct VBTREE *, int);
 int	iDumpTree (int);
 #endif	// DEBUG
-
-#define		TCC	(' ')		// Trailing Compression Character
-/*
- * Local scope variables
- */
-static	char	cNode0 [MAX_NODE_LENGTH];
-
-/*
- * Name:
- *	int	iVBCheckKey (int iHandle, struct keydesc *psKey, int iMode, int iRowLength, int iIsBuild);
- * Arguments:
- *	int	iHandle
- *		The open file descriptor of the VBISAM file (Not the dat file)
- *	struct	keydesc	*psKey
- *		The key description to be tested
- *	int	iMode
- *		0 - Test whether the key is 'valid' (Uses iRowLength)
- *		1 - Test whether the key is 'valid' and not already present
- *		2 - Test whether the key already exists
- *	int	iRowLength
- *		Only used when iMode = 0.  The minimum length of a row in bytes
- *	int	iIsBuild
- *		If non-zero, this allows isbuild to create a NULL primary key
- * Prerequisites:
- *	NONE
- * Returns:
- *	-1	Failure (iserrno contains more info)
- *	If iMode == 0
- *		0	Success (Passed the test in iMode)
- *	If iMode != 0
- *		n	Where n is the key number that matched
- * Problems:
- *	NONE known
- */
-int
-iVBCheckKey (int iHandle, struct keydesc *psKey, int iMode, int iRowLength, int iIsBuild)
-{
-	int	iLoop,
-		iPart,
-		iType;
-	struct	keydesc
-		*psLocalKey;
-
-	if (iMode)
-		iRowLength = psVBFile [iHandle]->iMinRowLength;
-	if (iMode < 2)
-	{
-	// Basic key validity test
-		psKey->iKeyLength = 0;
-		if (psKey->iFlags < 0 || psKey->iFlags > COMPRESS + ISDUPS)
-			goto VBCheckKeyExit;
-		if (psKey->iNParts >= NPARTS || psKey->iNParts < 0)
-			goto VBCheckKeyExit;
-		if (psKey->iNParts == 0 && !iIsBuild)
-			goto VBCheckKeyExit;
-		for (iPart = 0; iPart < psKey->iNParts; iPart++)
-		{
-		// Wierdly enough, a single keypart CAN span multiple instances
-		// EG: Part number 1 might contain 4 long values
-			psKey->iKeyLength += psKey->sPart [iPart].iLength;
-			if (psKey->iKeyLength > VB_MAX_KEYLEN)
-				goto VBCheckKeyExit;
-			iType = psKey->sPart [iPart].iType & ~ ISDESC;
-			switch (iType)
-			{
-			case	CHARTYPE:
-				break;
-
-			case	INTTYPE:
-				if (psKey->sPart [iPart].iLength % INTSIZE)
-					goto VBCheckKeyExit;
-				break;
-
-			case	LONGTYPE:
-				if (psKey->sPart [iPart].iLength % LONGSIZE)
-					goto VBCheckKeyExit;
-				break;
-
-			case	QUADTYPE:
-				if (psKey->sPart [iPart].iLength % QUADSIZE)
-					goto VBCheckKeyExit;
-				break;
-
-			case	FLOATTYPE:
-				if (psKey->sPart [iPart].iLength % FLOATSIZE)
-					goto VBCheckKeyExit;
-				break;
-
-			case	DOUBLETYPE:
-				if (psKey->sPart [iPart].iLength % DOUBLESIZE)
-					goto VBCheckKeyExit;
-				break;
-
-			default:
-				goto VBCheckKeyExit;
-			}
-			if (psKey->sPart [iPart].iStart + psKey->sPart [iPart].iLength > iRowLength)
-				goto VBCheckKeyExit;
-			if (psKey->sPart [iPart].iStart < 0)
-				goto VBCheckKeyExit;
-		}
-		if (!iMode)
-			return (0);
-	}
-
-	// Check whether the key already exists
-	for (iLoop = 0; iLoop < psVBFile [iHandle]->iNKeys; iLoop++)
-	{
-		psLocalKey = psVBFile [iHandle]->psKeydesc [iLoop];
-		if (psLocalKey->iNParts != psKey->iNParts)
-			continue;
-		for (iPart = 0; iPart < psLocalKey->iNParts; iPart++)
-		{
-			if (psLocalKey->sPart [iPart].iStart != psKey->sPart [iPart].iStart)
-				break;
-			if (psLocalKey->sPart [iPart].iLength != psKey->sPart [iPart].iLength)
-				break;
-			if (psLocalKey->sPart [iPart].iType != psKey->sPart [iPart].iType)
-				break;
-		}
-		if (iPart == psLocalKey->iNParts)
-			break;		/* found */
-	}
-	if (iLoop == psVBFile [iHandle]->iNKeys)
-	{
-		if (iMode == 2)
-			goto VBCheckKeyExit;
-		return (iLoop);
-	}
-	if (iMode == 1)
-		goto VBCheckKeyExit;
-	return (iLoop);
-
-VBCheckKeyExit:
-	iserrno = EBADKEY;
-	return (-1);
-}
-
-/*
- * Name:
- *	int	iVBRowInsert (int iHandle, char *pcRowBuffer, off_t tRowNumber);
- * Arguments:
- *	int	iHandle
- *		The open file descriptor of the VBISAM file (Not the dat file)
- *	char	*pcRowBuffer
- *		A pointer to the buffer containing the row to be added
- *	off_t	tRowNumber
- *		The absolute row number of the row to be added
- * Prerequisites:
- *	NONE
- * Returns:
- *	-1	Failure (iserrno contains more info)
- *	0	Success
- * Problems:
- *	NONE known
- */
-int
-iVBRowInsert (int iHandle, char *pcRowBuffer, off_t tRowNumber)
-{
-	char	cKeyValue [VB_MAX_KEYLEN];
-	int	iKeyNumber,
-		iResult;
-	struct	VBKEY
-		*psKey;
-	off_t	tDupNumber [MAXSUBS];
-
-	/*
-	 * Step 1:
-	 *	Check each index for a potential ISNODUPS error (EDUPL)
-	 *	Also, calculate the duplicate number as needed
-	 */
-	for (iKeyNumber = 0; iKeyNumber < psVBFile [iHandle]->iNKeys; iKeyNumber++)
-	{
-		if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iNParts == 0)
-			continue;
-		vVBMakeKey (iHandle, iKeyNumber, pcRowBuffer, cKeyValue);
-		iResult = iVBKeySearch (iHandle, ISGREAT, iKeyNumber, 0, cKeyValue, 0);
-		tDupNumber [iKeyNumber] = 0;
-		if (iResult >= 0 && !iVBKeyLoad (iHandle, iKeyNumber, ISPREV, FALSE, &psKey) && !memcmp (psKey->cKey, cKeyValue, psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength))
-		{
-			iserrno = EDUPL;
-			if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iFlags & ISDUPS)
-				tDupNumber [iKeyNumber] = psKey->tDupNumber + 1;
-			else
-				return (-1);
-		}
-	}
-
-	// Step 2: Perform the actual insertion into each index
-	for (iKeyNumber = 0; iKeyNumber < psVBFile [iHandle]->iNKeys; iKeyNumber++)
-	{
-		if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iNParts == 0)
-			continue;
-		vVBMakeKey (iHandle, iKeyNumber, pcRowBuffer, cKeyValue);
-		iResult = iKeyInsert (iHandle, VBTREE_NULL, iKeyNumber, cKeyValue, tRowNumber, tDupNumber [iKeyNumber], VBTREE_NULL);
-		if (iResult)
-		{
-// BUG - do something SANE here
-		// Eeek, an error occured.  Let's remove what we added
-			//while (iKeyNumber >= 0)
-			//{
-				//iKeyDelete (iHandle, iKeyNumber);
-				//iKeyNumber--;
-			//}
-			return (iResult);
-		}
-	}
-
-	return (0);
-}
-
-/*
- * Name:
- *	int	iVBRowDelete (int iHandle, off_t tRowNumber);
- * Arguments:
- *	int	iHandle
- *		The open file descriptor of the VBISAM file (Not the dat file)
- *	off_t	tRowNumber
- *		The row number to be deleted
- * Prerequisites:
- *	NONE
- * Returns:
- *	-1	Failure (iserrno contains more info)
- *	0	Success
- * Problems:
- *	NONE known
- */
-int
-iVBRowDelete (int iHandle, off_t tRowNumber)
-{
-	char	cKeyValue [VB_MAX_KEYLEN];
-	int	iKeyNumber,
-		iResult;
-	off_t	tDupNumber [MAXSUBS];
-
-	/*
-	 * Step 1:
-	 *	Check each index for existance of tRowNumber
-	 */
-	for (iKeyNumber = 0; iKeyNumber < psVBFile [iHandle]->iNKeys; iKeyNumber++)
-	{
-		if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iNParts == 0)
-			continue;
-		iResult = iVBKeyLocateRow (iHandle, iKeyNumber, tRowNumber);
-		iserrno = EBADFILE;
-		if (iResult)
-			return (-1);
-		tDupNumber [iKeyNumber] = psVBFile [iHandle]->psKeyCurr [iKeyNumber]->tDupNumber;
-	}
-
-	/*
-	 * Step 2:
-	 *	Perform the actual deletion from each index
-	 */
-	for (iKeyNumber = 0; iKeyNumber < psVBFile [iHandle]->iNKeys; iKeyNumber++)
-	{
-		if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iNParts == 0)
-			continue;
-		iResult = iKeyDelete (iHandle, iKeyNumber);
-		if (iResult)
-		{
-		// Eeek, an error occured.  Let's put back what we removed!
-			while (iKeyNumber >= 0)
-			{
-				vVBMakeKey (iHandle, iKeyNumber, *(psVBFile [iHandle]->ppcRowBuffer), cKeyValue);
-				iKeyInsert (iHandle, VBTREE_NULL, iKeyNumber, cKeyValue, tRowNumber, tDupNumber [iKeyNumber], VBTREE_NULL);
-				iKeyNumber--;
-			}
-			iserrno = iResult;
-			return (-1);
-		}
-	}
-
-	return (0);
-}
-
-/*
- * Name:
- *	int	iVBRowUpdate (int iHandle, char *pcRow, off_t tRowNumber);
- * Arguments:
- *	int	iHandle
- *		The open file descriptor of the VBISAM file (Not the dat file)
- *	char	*pcRow
- *		A pointer to the buffer containing the updated row
- *	off_t	tRowNumber
- *		The row number to be updated
- * Prerequisites:
- *	NONE
- * Returns:
- *	-1	Failure (iserrno contains more info)
- *	0	Success
- * Problems:
- *	NONE known
- */
-int
-iVBRowUpdate (int iHandle, char *pcRow, off_t tRowNumber)
-{
-	char	cKeyValue [VB_MAX_KEYLEN];
-	int	iKeyNumber,
-		iResult;
-	struct	VBKEY
-		*psKey;
-	off_t	tDupNumber = 0;
-
-	/*
-	 * Step 1:
-	 *	For each index that's changing, confirm that the NEW value
-	 *	doesn't conflict with an existing ISNODUPS flag.
-	 */
-	for (iKeyNumber = 0; iKeyNumber < psVBFile [iHandle]->iNKeys; iKeyNumber++)
-	{
-		if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iNParts == 0)
-			continue;
-		if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iFlags & ISDUPS)
-			continue;
-		vVBMakeKey (iHandle, iKeyNumber, pcRow, cKeyValue);
-		iResult = iVBKeySearch (iHandle, ISGTEQ, iKeyNumber, 0, cKeyValue, 0);
-		if (iResult != 1 || tRowNumber == psVBFile [iHandle]->psKeyCurr [iKeyNumber]->tRowNode || psVBFile [iHandle]->psKeyCurr[iKeyNumber]->sFlags.iIsDummy)
-			continue;
-		iserrno = EDUPL;
-		return (-1);
-	}
-
-	/*
-	 * Step 2:
-	 *	Check each index for existance of tRowNumber
-	 *	This 'preload' additionally helps determine which indexes change
-	 */
-	for (iKeyNumber = 0; iKeyNumber < psVBFile [iHandle]->iNKeys; iKeyNumber++)
-	{
-		if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iNParts == 0)
-			continue;
-		iResult = iVBKeyLocateRow (iHandle, iKeyNumber, tRowNumber);
-		iserrno = EBADFILE;
-		if (iResult)
-			return (-1);
-	}
-
-	/*
-	 * Step 3:
-	 *	Perform the actual deletion / insertion with each index
-	 *	But *ONLY* for those indexes that have actually CHANGED!
-	 */
-	for (iKeyNumber = 0; iKeyNumber < psVBFile [iHandle]->iNKeys; iKeyNumber++)
-	{
-		if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iNParts == 0)
-			continue;
-		vVBMakeKey (iHandle, iKeyNumber, pcRow, cKeyValue);
-		iResult = memcmp (cKeyValue, psVBFile [iHandle]->psKeyCurr [iKeyNumber]->cKey, psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength);
-		if (iResult)
-			iResult = iKeyDelete (iHandle, iKeyNumber);
-		else
-			continue;
-		if (iResult)
-		{
-		// Eeek, an error occured.  Let's put back what we removed!
-			while (iKeyNumber >= 0)
-			{
-// BUG - We need to do SOMETHING sane here? Dunno WHAT
-				iKeyInsert (iHandle, VBTREE_NULL, iKeyNumber, cKeyValue, tRowNumber, tDupNumber, VBTREE_NULL);
-				iKeyNumber--;
-				vVBMakeKey (iHandle, iKeyNumber, *(psVBFile [iHandle]->ppcRowBuffer), cKeyValue);
-			}
-			iserrno = iResult;
-			return (-1);
-		}
-		tDupNumber = 0;
-		if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iFlags & ISDUPS)
-		{
-			if (!iVBKeyLoad (iHandle, iKeyNumber, ISPREV, FALSE, &psKey) && !memcmp (psKey->cKey, cKeyValue, psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength))
-				tDupNumber = psKey->tDupNumber + 1;
-		}
-		iResult = iVBKeySearch (iHandle, ISGREAT, iKeyNumber, 0, cKeyValue, tDupNumber + 1);
-		if (iResult >= 0)
-			iResult = iKeyInsert (iHandle, VBTREE_NULL, iKeyNumber, cKeyValue, tRowNumber, tDupNumber, VBTREE_NULL);
-		if (iResult)
-		{
-		// Eeek, an error occured.  Let's remove what we added
-			while (iKeyNumber >= 0)
-			{
-// BUG - This is WRONG, we should re-establish what we had before!
-				//iKeyDelete (iHandle, iKeyNumber);
-				iKeyNumber--;
-			}
-			return (iResult);
-		}
-	}
-
-	return (0);
-}
 
 /*
  * Name:
@@ -551,12 +153,12 @@ iVBKeySearch (int iHandle, int iMode, int iKeyNumber, int iLength, char *pcKeyVa
 	switch (iMode)
 	{
 	case	ISFIRST:
-		vLowValueKeySet (psKeydesc, cKeyValue);
+		vVBKeyValueSet (0, psKeydesc, cKeyValue);
 		tDupNumber = -1;
 		return (iTreeLoad (iHandle, iKeyNumber, iLength, cKeyValue, tDupNumber));
 
 	case	ISLAST:
-		vHighValueKeySet (psKeydesc, cKeyValue);
+		vVBKeyValueSet (1, psKeydesc, cKeyValue);
 		memset (cBuffer, 0xff, QUADSIZE);
 		cBuffer [0] = 0x7f;
 		tDupNumber = ldquad (cBuffer);
@@ -696,7 +298,6 @@ iVBKeyLocateRow (int iHandle, int iKeyNumber, off_t tRowNumber)
  *	int	iSetCurr
  *		0 - Leave psVBFile [iHandle]->psTree [iKeyNumber]->psKeyCurr
  *		Other - SET it!
- *		The actual uncompressed key to delete
  * Prerequisites:
  *	NONE
  * Returns:
@@ -764,7 +365,7 @@ iVBKeyLoad (int iHandle, int iKeyNumber, int iMode, int iSetCurr, struct VBKEY *
 						psKey->psChild->sFlags.iIsEOF = 1;
 				}
 				psKeyHold = psKey;
-				iResult = iNodeLoad (iHandle, iKeyNumber, psKey->psChild, psKey->tRowNode, psTree->sFlags.iLevel);
+				iResult = iVBNodeLoad (iHandle, iKeyNumber, psKey->psChild, psKey->tRowNode, psTree->sFlags.iLevel);
 				if (iResult)
 				{
 				// Ooops, make sure the tree is not corrupt
@@ -829,7 +430,7 @@ iVBKeyLoad (int iHandle, int iKeyNumber, int iMode, int iSetCurr, struct VBKEY *
 						psKey->psChild->sFlags.iIsEOF = 1;
 				}
 				psKeyHold = psKey;
-				iResult = iNodeLoad (iHandle, iKeyNumber, psKey->psChild, psKey->tRowNode, psTree->sFlags.iLevel);
+				iResult = iVBNodeLoad (iHandle, iKeyNumber, psKey->psChild, psKey->tRowNode, psTree->sFlags.iLevel);
 				if (iResult)
 				{
 				// Ooops, make sure the tree is not corrupt
@@ -858,181 +459,303 @@ iVBKeyLoad (int iHandle, int iKeyNumber, int iMode, int iSetCurr, struct VBKEY *
 
 /*
  * Name:
- *	int	iVBMakeKeysFromData (int iHandle, int iKeyNumber);
+ *	void	vVBKeyValueSet (int iHigh, struct keydesc *psKeydesc, char *pcKeyValue)
  * Arguments:
- *	int	iHandle
- *		The open file descriptor of the VBISAM file (Not the dat file)
- *	int	iKeyNumber
- *		The absolute key number within the index file (0-n)
+ *	int	iHigh
+ *		0	Set it low
+ *		Other	Set it high
+ *	struct	keydesc	*psKeydesc
+ *		The keydesc structure to use
+ *	char	*pcKeyValue
+ *		The receiving uncompressed key
  * Prerequisites:
  *	NONE
  * Returns:
- *	-1	Failure (iserrno contains more info)
  *	0	Success
+ *	OTHER	As per sub function calls
  * Problems:
  *	NONE known
- * Comments:
- *	Reads in EVERY data row and creates a key entry for it
  */
-int
-iVBMakeKeysFromData (int iHandle, int iKeyNumber)
+void
+vVBKeyValueSet (int iHigh, struct keydesc *psKeydesc, char *pcKeyValue)
 {
-	char	cKeyValue [VB_MAX_KEYLEN];
-	int	iDeleted,
-		iResult;
-	struct	VBKEY
-		*psKey;
-	off_t	tDupNumber,
-		tLoop;
+	char	cBuffer [QUADSIZE];
+	int	iPart,
+		iRemainder;
 
-	// Don't have to insert if the key is a NULL key!
-	if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iNParts == 0)
-		return (0);
-
-	for (tLoop = 1; tLoop < ldquad (psVBFile [iHandle]->sDictNode.cDataCount); tLoop++)
-	{	
-		/*
-		 * Step 1:
-		 *	Read in the existing data row (Just the min rowlength)
-		 */
-		iserrno = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, tLoop, FALSE);
-		if (iserrno)
-			return (-1);
-		if (iDeleted)
-			continue;
-		/*
-		 * Step 2:
-		 *	Check the index for a potential ISNODUPS error (EDUPL)
-		 *	Also, calculate the duplicate number as needed
-		 */
-		vVBMakeKey (iHandle, iKeyNumber, *(psVBFile [iHandle]->ppcRowBuffer), cKeyValue);
-		iResult = iVBKeySearch (iHandle, ISGREAT, iKeyNumber, 0, cKeyValue, 0);
-		tDupNumber = 0;
-		if (iResult >= 0 && !iVBKeyLoad (iHandle, iKeyNumber, ISPREV, FALSE, &psKey) && !memcmp (psKey->cKey, cKeyValue, psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength))
+	for (iPart = 0; iPart < psKeydesc->iNParts; iPart++)
+	{
+		switch (psKeydesc->sPart [iPart].iType & ~ISDESC)
 		{
-			iserrno = EDUPL;
-			if (psVBFile [iHandle]->psKeydesc [iKeyNumber]->iFlags & ISDUPS)
-				tDupNumber = psKey->tDupNumber + 1;
-			else
-				return (-1);
-		}
+		case	CHARTYPE:
+			memset (pcKeyValue, iHigh ? 0xff : 0, psKeydesc->sPart [iPart].iLength);
+			pcKeyValue += psKeydesc->sPart [iPart].iLength;
+			break;
 
-		/*
-		 * Step 3:
-		 * Perform the actual insertion into the index
-		 */
-		iResult = iKeyInsert (iHandle, VBTREE_NULL, iKeyNumber, cKeyValue, tLoop, tDupNumber, VBTREE_NULL);
-		if (iResult)
-			return (iResult);
+		case	INTTYPE:
+			iRemainder = psKeydesc->sPart [iPart].iLength;
+			while (iRemainder > 0)
+			{
+				stint (iHigh ? SHRT_MAX : SHRT_MIN, pcKeyValue);
+				pcKeyValue += INTSIZE;
+				iRemainder -= INTSIZE;
+			}
+			break;
+
+		case	LONGTYPE:
+			iRemainder = psKeydesc->sPart [iPart].iLength;
+			while (iRemainder > 0)
+			{
+				stlong (iHigh ? LONG_MAX : LONG_MIN, pcKeyValue);
+				pcKeyValue += LONGSIZE;
+				iRemainder -= LONGSIZE;
+			}
+			break;
+
+		case	QUADTYPE:
+			memset (cBuffer, iHigh ? 0xff : 0, QUADSIZE);
+			cBuffer [0] = iHigh ? 0x7f : 0x80;
+			iRemainder = psKeydesc->sPart [iPart].iLength;
+			while (iRemainder > 0)
+			{
+				memcpy (pcKeyValue, cBuffer, QUADSIZE);
+				pcKeyValue += QUADSIZE;
+				iRemainder -= QUADSIZE;
+			}
+			break;
+
+		case	FLOATTYPE:
+			iRemainder = psKeydesc->sPart [iPart].iLength;
+			while (iRemainder > 0)
+			{
+				stfloat (iHigh ? FLT_MAX : FLT_MIN, pcKeyValue);
+				pcKeyValue += FLOATSIZE;
+				iRemainder -= FLOATSIZE;
+			}
+			break;
+
+		case	DOUBLETYPE:
+			iRemainder = psKeydesc->sPart [iPart].iLength;
+			while (iRemainder > 0)
+			{
+				stdbl (iHigh ? DBL_MAX : DBL_MIN, pcKeyValue);
+				pcKeyValue += DOUBLESIZE;
+				iRemainder -= DOUBLESIZE;
+			}
+			break;
+
+		default:	// Please pass me the samurai sword, I goofed
+			fprintf (stderr, "HUGE ERROR! File %s, Line %d Type %d\n", __FILE__, __LINE__, psKeydesc->sPart [iPart].iType);
+			exit (1);
+		}
 	}
-	return (0);
 }
 
 /*
  * Name:
- *	int	iVBDelNodes (int iHandle, int iKeyNumber, off_t tRootNode);
+ *	int	iVBKeyInsert (int iHandle, struct VBTREE *psTree, int iKeyNumber, char *pcKeyValue, off_t tRowNode, off_t tDupNumber, struct VBTREE *psChild);
  * Arguments:
  *	int	iHandle
  *		The open file descriptor of the VBISAM file (Not the dat file)
+ *	struct	VBTREE	*psTree
+ *		The VBTREE structure containing data to be used with this call
  *	int	iKeyNumber
- *		The key number being deleted
- *	off_t	tRootNode
- *		The root node of the index being deleted
+ *		The index number in question
+ *	char	*pcKeyValue
+ *		The actual uncompressed key to insert
+ *	off_t	tRowNode
+ *		The row number (LEAF NODE) or node number to be inserted
+ *	off_t	tDupNumber
+ *		The duplicate number (0 = first)
+ *	struct	VBTREE	*psChild
+ *		The VBTREE structure that this new entry will point to
  * Prerequisites:
  *	NONE
  * Returns:
- *	-1	Failure (iserrno contains more info)
  *	0	Success
+ *	OTHER	As per sub function calls
  * Problems:
  *	NONE known
  * Comments:
- *	ONLY used by isdelindex!
+ *	Insert the key pcKeyValue into the index.
+ *	Assumes that psVBFile [iHandle]->psTree [iKeyNumber] is setup
+ *	Always inserts the key BEFORE psTree->psKeyCurr
+ *	Sets psVBFile [iHandle]->psKeyCurr [iKeyNumber] to the newly added key
  */
 int
-iVBDelNodes (int iHandle, int iKeyNumber, off_t tRootNode)
+iVBKeyInsert (int iHandle, struct VBTREE *psTree, int iKeyNumber, char *pcKeyValue, off_t tRowNode, off_t tDupNumber, struct VBTREE *psChild)
 {
-	char	cLclNode [MAX_NODE_LENGTH],
-		*pcSrcPtr;
-	int	iDuplicate,
-		iKeyLength,
-		iCompLength = 0,
-		iNodeUsed,
-		iResult = 0;
-	struct	keydesc
-		*psKeydesc;
+	int	iResult;
+	struct	VBKEY
+		*psKey;
 
-	psKeydesc = psVBFile [iHandle]->psKeydesc [iKeyNumber];
-	//iResult = iVBNodeRead (iHandle, (void *) cLclNode, tRootNode);
-	iResult = iVBBlockRead (iHandle, TRUE, tRootNode, cLclNode);
-	if (iResult)
-		return (iResult);
-	// Recurse for non-leaf nodes
-	if (*(cLclNode + psVBFile [iHandle]->iNodeSize - 2))
-	{
-		iNodeUsed = ldint (cLclNode);
-#if	_FILE_OFFSET_BITS == 64
-		pcSrcPtr = cLclNode + INTSIZE + QUADSIZE;
-#else	// _FILE_OFFSET_BITS == 64
-		pcSrcPtr = cLclNode + INTSIZE;
-#endif	// _FILE_OFFSET_BITS == 64
-		iDuplicate = FALSE;
-		while (pcSrcPtr - cLclNode < iNodeUsed)
-		{
-			if (iDuplicate)
-			{
-				if (!(*(pcSrcPtr + QUADSIZE) & 0x80))
-					iDuplicate = FALSE;
-				*(pcSrcPtr + QUADSIZE) &= ~0x80;
-				iResult = iVBDelNodes (iHandle, iKeyNumber, ldquad (pcSrcPtr + QUADSIZE));
-				if (iResult)
-					return (iResult);
-				pcSrcPtr += (QUADSIZE * 2);
-			}
-			iKeyLength = psKeydesc->iKeyLength;
-			if (psKeydesc->iFlags & LCOMPRESS)
-			{
-#if	_FILE_OFFSET_BITS == 64
-				iCompLength = ldint (pcSrcPtr);
-				pcSrcPtr += INTSIZE;
-				iKeyLength -= (iCompLength - 2);
-#else	// _FILE_OFFSET_BITS == 64
-				iCompLength = *(pcSrcPtr);
-				pcSrcPtr++;
-				iKeyLength -= (iCompLength - 1);
-#endif	// _FILE_OFFSET_BITS == 64
-			}
-			if (psKeydesc->iFlags & TCOMPRESS)
-			{
-#if	_FILE_OFFSET_BITS == 64
-				iCompLength = ldint (pcSrcPtr);
-				pcSrcPtr += INTSIZE;
-				iKeyLength -= (iCompLength - 2);
-#else	// _FILE_OFFSET_BITS == 64
-				iCompLength = *pcSrcPtr;
-				pcSrcPtr++;
-				iKeyLength -= (iCompLength - 1);
-#endif	// _FILE_OFFSET_BITS == 64
-			}
-			pcSrcPtr += iKeyLength;
-			if (psKeydesc->iFlags & ISDUPS)
-			{
-				pcSrcPtr += QUADSIZE;
-				if (*pcSrcPtr & 0x80)
-					iDuplicate = TRUE;
-			}
-			iResult = iVBDelNodes (iHandle, iKeyNumber, ldquad (pcSrcPtr));
-			if (iResult)
-				return (iResult);
-			pcSrcPtr += QUADSIZE;
-		}
-	}
-	iResult = iVBNodeFree (iHandle, tRootNode);
+	psKey = psVBKeyAllocate (iHandle, iKeyNumber);
+	if (!psKey)
+		return (errno);
+	if (!psVBFile [iHandle]->psKeyCurr [iKeyNumber])
+		return (EBADFILE);
+	if (!psTree)
+		psTree = psVBFile [iHandle]->psKeyCurr [iKeyNumber]->psParent; 
+	psKey->psParent = psTree;
+	psKey->psChild = psChild;
+	psKey->tRowNode = tRowNode;
+	psKey->tDupNumber = tDupNumber;
+	psKey->sFlags.iIsNew = 1;
+	memcpy (psKey->cKey, pcKeyValue, psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength);
+	psKey->psNext = psTree->psKeyCurr;
+	psKey->psPrev = psTree->psKeyCurr->psPrev;
+	if (psTree->psKeyCurr->psPrev)
+		psTree->psKeyCurr->psPrev->psNext = psKey;
+	else
+		psTree->psKeyFirst = psKey;
+	psTree->psKeyCurr->psPrev = psKey;
+	psTree->psKeyCurr = psKey;
+	psVBFile [iHandle]->psKeyCurr [iKeyNumber] = psKey;
+	iResult = iVBNodeSave (iHandle, iKeyNumber, psKey->psParent, psKey->psParent->tNodeNumber);
+	psKey->sFlags.iIsNew = 0;
 	return (iResult);
 }
 
 /*
  * Name:
- *	static	int	iKeyCompare (int iHandle, int iKeyNumber, int iLength, char *pcKey1, char *pcKey2);
+ *	int	iVBKeyDelete (int iHandle, int iKeyNumber);
+ * Arguments:
+ *	int	iHandle
+ *		The open file descriptor of the VBISAM file (Not the dat file)
+ *	int	iKeyNumber
+ *		The index number in question
+ * Prerequisites:
+ *	NONE
+ * Returns:
+ *	0	Success
+ *	OTHER	As per sub function calls
+ * Problems:
+ *	NONE known
+ */
+int
+iVBKeyDelete (int iHandle, int iKeyNumber)
+{
+	int	iResult;
+	struct	VBKEY
+		*psKey,
+		*psKeyHold;
+	struct	VBTREE
+		*psTree,
+		*psTreeRoot;
+
+	psKey = psVBFile [iHandle]->psKeyCurr [iKeyNumber];
+	/*
+	 * We're going to *TRY* to keep the index buffer populated!
+	 * However, since it's technically feasible for the current node to be
+	 * removed in it's entirety, we can only do this if there is at least 1
+	 * other key in the node that's not the dummy entry.
+	 * Since the current key is guaranteed to be at the LEAF node level (0),
+	 * it's impossible to ever have an iIsHigh entry in the node.
+	 */
+	if (psVBFile [iHandle]->psKeyCurr [iKeyNumber]->psPrev)
+		psVBFile [iHandle]->psKeyCurr [iKeyNumber] = psVBFile [iHandle]->psKeyCurr [iKeyNumber]->psPrev;
+	else
+		if (psVBFile [iHandle]->psKeyCurr [iKeyNumber]->psNext && psVBFile [iHandle]->psKeyCurr [iKeyNumber]->psNext->sFlags.iIsDummy == 0)
+			psVBFile [iHandle]->psKeyCurr [iKeyNumber] = psVBFile [iHandle]->psKeyCurr [iKeyNumber]->psNext;
+		else
+			psVBFile [iHandle]->psKeyCurr [iKeyNumber] = VBKEY_NULL;
+	while (1)
+	{
+		psTree = psKey->psParent;
+		if (psKey->sFlags.iIsHigh)
+		{
+		// Handle removal of the high key in a node
+			if (psKey->psPrev)
+			{
+				psKey->psChild = psKey->psPrev->psChild;
+				psKey->tRowNode = psKey->psPrev->tRowNode;
+				psKey->tDupNumber = psKey->psPrev->tDupNumber;
+				psKey = psKey->psPrev;
+			}
+			else
+			{
+				iResult = iVBNodeFree (iHandle, psTree->tNodeNumber);	// BUG - didn't check iResult
+				psTree = psTree->psParent;
+				vVBTreeAllFree (iHandle, iKeyNumber, psTree->psKeyCurr->psChild);
+				psKey = psTree->psKeyCurr;
+				psKey->psChild = VBTREE_NULL;
+				continue;
+			}
+		}
+		if (psKey->psPrev)
+			psKey->psPrev->psNext = psKey->psNext;
+		else
+			psTree->psKeyFirst = psKey->psNext;
+		if (psKey->psNext)
+			psKey->psNext->psPrev = psKey->psPrev;
+		psKey->psParent = VBTREE_NULL;
+		psKey->psChild = VBTREE_NULL;
+		vVBKeyFree (iHandle, iKeyNumber, psKey);
+		if (!psTree->sFlags.iIsRoot && psTree->psKeyFirst->sFlags.iIsDummy)
+		{
+		// Handle removal of the last key in a node
+			iResult = iVBNodeFree (iHandle, psTree->tNodeNumber);	// BUG - didn't check iResult
+			psTree = psTree->psParent;
+			vVBTreeAllFree (iHandle, iKeyNumber, psTree->psKeyCurr->psChild);
+			psTree->psKeyCurr->psChild = VBTREE_NULL;
+			psKey = psTree->psKeyCurr;
+			continue;
+		}
+		break;
+	}
+	while (psTree->psKeyFirst->sFlags.iIsHigh && psTree->sFlags.iIsRoot)
+	{
+		psKey = psTree->psKeyFirst;
+		if (!psKey->psChild || psVBFile [iHandle]->sFlags.iIndexChanged)
+		{
+			if (!psKey->psChild)
+			{
+				psKey->psChild = psVBTreeAllocate (iHandle);
+				if (!psKey->psChild)
+					return (errno);
+				psKey->psChild->psParent = psKey->psParent;
+				if (psKey->psParent->sFlags.iIsTOF && psKey == psKey->psParent->psKeyFirst)
+					psKey->psChild->sFlags.iIsTOF = 1;
+				if (psKey->psParent->sFlags.iIsEOF && psKey == psKey->psParent->psKeyLast->psPrev)
+					psKey->psChild->sFlags.iIsEOF = 1;
+			}
+			psKeyHold = psKey;
+			iResult = iVBNodeLoad (iHandle, iKeyNumber, psKey->psChild, psKey->tRowNode, psTree->sFlags.iLevel);
+			if (iResult)
+			{
+			// Ooops, make sure the tree is not corrupt
+				vVBTreeAllFree (iHandle, iKeyNumber, psKeyHold->psChild);
+				psKeyHold->psChild = VBTREE_NULL;
+				return (iResult);
+			}
+		}
+		// Time to collapse the root node (Yippee!)
+		iResult = iVBNodeFree (iHandle, psTree->psKeyFirst->psChild->tNodeNumber);	// BUG - didn't check iResult
+		psTreeRoot = psTree->psKeyFirst->psChild;
+		psTreeRoot->tNodeNumber = psTree->tNodeNumber;
+		psTreeRoot->psParent = VBTREE_NULL;
+		psTreeRoot->sFlags.iIsTOF = 1;
+		psTreeRoot->sFlags.iIsEOF = 1;
+		psTreeRoot->sFlags.iIsRoot = 1;
+		psVBFile [iHandle]->psTree [iKeyNumber] = psTreeRoot;
+		psTree->psKeyFirst->psChild = VBTREE_NULL;
+		vVBTreeAllFree (iHandle, iKeyNumber, psTree);
+		psTree = psTreeRoot;
+		if (psTree->sFlags.iLevel)
+		{
+			psTree->psKeyLast->psPrev->sFlags.iIsHigh = 1;
+			vVBKeyValueSet (1, psVBFile [iHandle]->psKeydesc [iKeyNumber], psTree->psKeyLast->psPrev->cKey);
+		}
+		iResult = iVBNodeSave (iHandle, iKeyNumber, psTree, psTree->tNodeNumber);	// Bug - didn't check result
+	}
+	iResult = iVBNodeSave (iHandle, iKeyNumber, psTree, psTree->tNodeNumber);	// BUG - didn't check iResult
+
+	return (0);
+}
+
+/*
+ * Name:
+ *	int	iVBKeyCompare (int iHandle, int iKeyNumber, int iLength, char *pcKey1, char *pcKey2);
  * Arguments:
  *	int	iHandle
  *		The open file descriptor of the VBISAM file (Not the dat file)
@@ -1053,8 +776,8 @@ iVBDelNodes (int iHandle, int iKeyNumber, off_t tRootNode)
  * Problems:
  *	NONE known
  */
-static	int
-iKeyCompare (int iHandle, int iKeyNumber, int iLength, unsigned char *pcKey1, unsigned char *pcKey2)
+int
+iVBKeyCompare (int iHandle, int iKeyNumber, int iLength, unsigned char *pcKey1, unsigned char *pcKey2)
 {
 	int	iDescBias,
 		iPart,
@@ -1214,7 +937,9 @@ iKeyCompare (int iHandle, int iKeyNumber, int iLength, unsigned char *pcKey1, un
 static	int
 iTreeLoad (int iHandle, int iKeyNumber, int iLength, char *pcKeyValue, off_t tDupNumber)
 {
-	int	iResult = 0;
+	int	iDelta,
+		iIndex,
+		iResult = 0;
 	struct	VBKEY
 		*psKey;
 	struct	VBTREE
@@ -1231,7 +956,7 @@ iTreeLoad (int iHandle, int iKeyNumber, int iLength, char *pcKeyValue, off_t tDu
 		psTree->sFlags.iIsRoot = 1;
 		psTree->sFlags.iIsTOF = 1;
 		psTree->sFlags.iIsEOF = 1;
-		iserrno = iNodeLoad (iHandle, iKeyNumber, psTree, psVBFile [iHandle]->psKeydesc [iKeyNumber]->tRootNode, -1);
+		iserrno = iVBNodeLoad (iHandle, iKeyNumber, psTree, psVBFile [iHandle]->psKeydesc [iKeyNumber]->tRootNode, -1);
 		if (iserrno)
 		{
 			vVBTreeAllFree (iHandle, iKeyNumber, psTree);
@@ -1243,7 +968,7 @@ iTreeLoad (int iHandle, int iKeyNumber, int iLength, char *pcKeyValue, off_t tDu
 	else
 		if (psVBFile [iHandle]->sFlags.iIndexChanged)
 		{
-			iserrno = iNodeLoad (iHandle, iKeyNumber, psTree, psVBFile [iHandle]->psKeydesc [iKeyNumber]->tRootNode, -1);
+			iserrno = iVBNodeLoad (iHandle, iKeyNumber, psTree, psVBFile [iHandle]->psKeydesc [iKeyNumber]->tRootNode, -1);
 			if (iserrno)
 			{
 				vVBTreeAllFree (iHandle, iKeyNumber, psTree);
@@ -1260,23 +985,82 @@ iTreeLoad (int iHandle, int iKeyNumber, int iLength, char *pcKeyValue, off_t tDu
 	psTree->sFlags.iIsEOF = 1;
 	while (1)
 	{
-		for (psTree->psKeyCurr = psTree->psKeyFirst; psTree->psKeyCurr && psTree->psKeyCurr->psNext; psTree->psKeyCurr = psTree->psKeyCurr->psNext)
+// The following code takes a 'bisection' type approach for location of the
+// key entry.  It FAR outperforms the original sequential search code.
+#if _FILE_OFFSET_BITS == 64
+		iDelta = 256;		// Magic stuff based on NODE LENGTH
+		iIndex = 256;		// and QUADSIZE.  Don't change
+#else	//_FILE_OFFSET_BITS == 64
+		iDelta = 128;		// Magic stuff based on NODE LENGTH
+		iIndex = 128;		// and QUADSIZE.  Don't change
+#endif	// _FILE_OFFSET_BITS == 64
+		while (iDelta)
 		{
-			if (psTree->psKeyCurr->sFlags.iIsHigh)
-				break;
-			iResult = iKeyCompare (iHandle, iKeyNumber, iLength, pcKeyValue, psTree->psKeyCurr->cKey);
-			if (iResult < 0)
-				break;		// Exit the for loop
-			if (iResult > 0)
-				continue;
-			if (tDupNumber < psTree->psKeyCurr->tDupNumber)
+			iDelta = iDelta >> 1;
+			if (iIndex > psTree->sFlags.iKeysInNode)
 			{
-				iResult = -1;
-				break;		// Exit the for loop
+				iIndex -= iDelta;
+				continue;
 			}
-			if (tDupNumber == psTree->psKeyCurr->tDupNumber)
-				break;		// Exit the for loop
+			psTree->psKeyCurr = psTree->psKeyList [iIndex - 1];
+			if (psTree->psKeyCurr->sFlags.iIsDummy)
+				iResult = -1;
+			else
+				iResult = iVBKeyCompare (iHandle, iKeyNumber, iLength, pcKeyValue, psTree->psKeyCurr->cKey);
+			if (iResult == 0)
+			{
+				if (tDupNumber > psTree->psKeyCurr->tDupNumber)
+				{
+					iResult = 1;
+					iIndex += iDelta;
+					continue;
+				}
+				if (tDupNumber < psTree->psKeyCurr->tDupNumber)
+				{
+					iResult = -1;
+					iIndex -= iDelta;
+					continue;
+				}
+				if (tDupNumber == psTree->psKeyCurr->tDupNumber)
+					break;
+			}
+			if (iResult < 0)
+			{
+				iIndex -= iDelta;
+				continue;
+			}
+			if (iResult > 0)
+			{
+				iIndex += iDelta;
+				continue;
+			}
 		}
+		if (iResult > 0 && psTree->psKeyCurr->psNext)
+			psTree->psKeyCurr = psTree->psKeyList [iIndex];
+		if (psTree->psKeyCurr->sFlags.iIsDummy && psTree->psKeyCurr->psPrev && psTree->psKeyCurr->psPrev->sFlags.iIsHigh)
+			psTree->psKeyCurr = psTree->psKeyCurr->psPrev;
+		iResult = iVBKeyCompare (iHandle, iKeyNumber, iLength, pcKeyValue, psTree->psKeyCurr->cKey);
+		if (iResult == 0 && tDupNumber < psTree->psKeyCurr->tDupNumber)
+			iResult = -1;
+// The following code was WAY too s-l-o-w...
+// ESPECIALLY on small indexes where there are LOTS of keys per node
+//		for (psTree->psKeyCurr = psTree->psKeyFirst; psTree->psKeyCurr && psTree->psKeyCurr->psNext; psTree->psKeyCurr = psTree->psKeyCurr->psNext)
+//		{
+//			if (psTree->psKeyCurr->sFlags.iIsHigh)
+//				break;
+//			iResult = iVBKeyCompare (iHandle, iKeyNumber, iLength, pcKeyValue, psTree->psKeyCurr->cKey);
+//			if (iResult < 0)
+//				break;		// Exit the for loop
+//			if (iResult > 0)
+//				continue;
+//			if (tDupNumber < psTree->psKeyCurr->tDupNumber)
+//			{
+//				iResult = -1;
+//				break;		// Exit the for loop
+//			}
+//			if (tDupNumber == psTree->psKeyCurr->tDupNumber)
+//				break;		// Exit the for loop
+//		}
 		if (!psTree->sFlags.iLevel)
 			break;			// Exit the while loop
 		if (!psTree->psKeyCurr)
@@ -1296,7 +1080,7 @@ iTreeLoad (int iHandle, int iKeyNumber, int iLength, char *pcKeyValue, off_t tDu
 				if (psKey->psParent->sFlags.iIsEOF && psKey == psKey->psParent->psKeyLast->psPrev)
 					psKey->psChild->sFlags.iIsEOF = 1;
 			}
-			iserrno = iNodeLoad (iHandle, iKeyNumber, psTree->psKeyCurr->psChild, psTree->psKeyCurr->tRowNode, psTree->sFlags.iLevel);
+			iserrno = iVBNodeLoad (iHandle, iKeyNumber, psTree->psKeyCurr->psChild, psTree->psKeyCurr->tRowNode, psTree->sFlags.iLevel);
 			if (iserrno)
 			{
 				vVBTreeAllFree (iHandle, iKeyNumber, psKey->psChild);
@@ -1342,934 +1126,6 @@ TreeLoadExit:
 	return (-1);
 }
 
-/*
- * Name:
- *	static	int	iNodeLoad (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumber, int iPrevLvl);
- * Arguments:
- *	int	iHandle
- *		The open file descriptor of the VBISAM file (Not the dat file)
- *	int	iKeyNumber
- *		The index number in question
- *	struct VBTREE	*psTree
- *		The VBTREE structure to be filled in with this call
- *	off_t	tNodeNumber
- *		The absolute node number within the index file (1..n)
- *	int	iPrevLvl
- *		-1	We're loading the root node
- *		Other	The node we're loading should be one less than this
- * Prerequisites:
- *	NONE
- * Returns:
- *	0	Success
- *	EBADFILE
- *	OTHER	As per sub function calls
- * Problems:
- *	NONE known
- */
-static	int
-iNodeLoad (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumber, int iPrevLvl)
-{
-	char	cPrevKey [VB_MAX_KEYLEN],
-		cHighKey [VB_MAX_KEYLEN],
-		*pcNodePtr;
-	int	iCountLC = 0,		// Leading compression
-		iCountTC = 0,		// Trailing compression
-		iDups = FALSE,
-		iNodeLen,
-		iResult;
-	struct	VBKEY
-		*psKey,
-		*psKeyNext;
-	struct	keydesc
-		*psKeydesc;
-#if	_FILE_OFFSET_BITS == 64
-	off_t	tTransNumber;
-#endif	// _FILE_OFFSET_BITS == 64
-
-	psKeydesc = psVBFile [iHandle]->psKeydesc[iKeyNumber];
-	vLowValueKeySet (psKeydesc, cPrevKey);
-	vHighValueKeySet (psKeydesc, cHighKey);
-	//iResult = iVBNodeRead (iHandle, (char *) cNode0, tNodeNumber);
-	iResult = iVBBlockRead (iHandle, TRUE, tNodeNumber, cNode0);
-	if (iResult)
-		return (iResult);
-	if (iPrevLvl != -1)
-		if (*(cNode0 + psVBFile [iHandle]->iNodeSize - 2) != iPrevLvl - 1)
-			return (EBADFILE);
-	psTree->tNodeNumber = tNodeNumber;
-	psTree->sFlags.iLevel = *(cNode0 + psVBFile [iHandle]->iNodeSize - 2);
-	iNodeLen = ldint (cNode0);
-#if	_FILE_OFFSET_BITS == 64
-	pcNodePtr = cNode0 + INTSIZE + QUADSIZE;
-	tTransNumber = ldquad (cNode0 + INTSIZE);
-	if (tTransNumber == psTree->tTransNumber)
-		return (0);
-#else	// _FILE_OFFSET_BITS == 64
-	pcNodePtr = cNode0 + INTSIZE;
-#endif	// _FILE_OFFSET_BITS == 64
-	for (psKey = psTree->psKeyFirst; psKey; psKey = psKeyNext)
-	{
-		if (psKey->psChild)
-			vVBTreeAllFree (iHandle, iKeyNumber, psKey->psChild);
-		psKey->psChild = VBTREE_NULL;
-		psKeyNext = psKey->psNext;
-		vVBKeyFree (iHandle, iKeyNumber, psKey);
-	}
-	psTree->psKeyFirst = psTree->psKeyCurr = psTree->psKeyLast = VBKEY_NULL;
-	while (pcNodePtr - cNode0 < iNodeLen)
-	{
-		psKey = psVBKeyAllocate (iHandle, iKeyNumber);
-		if (!psKey)
-			return (errno);
-		if (!iDups)
-		{
-			if (psKeydesc->iFlags & LCOMPRESS)
-			{
-#if	_FILE_OFFSET_BITS == 64
-				iCountLC = ldint (pcNodePtr);
-				pcNodePtr += INTSIZE;
-#else	// _FILE_OFFSET_BITS == 64
-				iCountLC = *(pcNodePtr);
-				pcNodePtr++;
-#endif	// _FILE_OFFSET_BITS == 64
-			}
-			if (psKeydesc->iFlags & TCOMPRESS)
-			{
-#if	_FILE_OFFSET_BITS == 64
-				iCountTC = ldint (pcNodePtr);
-				pcNodePtr += INTSIZE;
-#else	// _FILE_OFFSET_BITS == 64
-				iCountTC = *(pcNodePtr);
-				pcNodePtr++;
-#endif	// _FILE_OFFSET_BITS == 64
-			}
-			memcpy (cPrevKey + iCountLC, pcNodePtr, psKeydesc->iKeyLength - (iCountLC + iCountTC));
-			memset (cPrevKey + psKeydesc->iKeyLength - iCountTC, TCC, iCountTC);
-			pcNodePtr += psKeydesc->iKeyLength - (iCountLC + iCountTC);
-		}
-		if (psKeydesc->iFlags & ISDUPS)
-		{
-			psKey->tDupNumber = ldquad (pcNodePtr);
-			pcNodePtr += QUADSIZE;
-		}
-		else
-			psKey->tDupNumber = 0;
-		if (psKeydesc->iFlags & DCOMPRESS)
-		{
-			if (*pcNodePtr & 0x80)
-				iDups = TRUE;
-			else
-				iDups = FALSE;
-			*pcNodePtr &= ~0x80;
-		}
-		psKey->tRowNode = ldquad (pcNodePtr);
-		pcNodePtr += QUADSIZE;
-		psKey->psParent = psTree;
-		if (psTree->psKeyFirst)
-			psTree->psKeyLast->psNext = psKey;
-		else
-			psTree->psKeyFirst = psTree->psKeyCurr = psKey;
-		psKey->psPrev = psTree->psKeyLast;
-		psTree->psKeyLast = psKey;
-		memcpy (psKey->cKey, cPrevKey, psKeydesc->iKeyLength);
-	}
-	if (psTree->sFlags.iLevel)
-	{
-		psTree->psKeyLast->sFlags.iIsHigh = 1;
-		memcpy (psTree->psKeyLast->cKey, cHighKey, psKeydesc->iKeyLength);
-	}
-	psKey = psVBKeyAllocate (iHandle, iKeyNumber);
-	if (!psKey)
-		return (errno);
-	psKey->psParent = psTree;
-	psKey->sFlags.iIsDummy = 1;
-	if (psTree->psKeyFirst)
-		psTree->psKeyLast->psNext = psKey;
-	else
-		psTree->psKeyFirst = psTree->psKeyCurr = psKey;
-	psKey->psPrev = psTree->psKeyLast;
-	psTree->psKeyLast = psKey;
-	return (0);
-}
-
-/*
- * Name:
- *	static	int	iNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumber);
- * Arguments:
- *	int	iHandle
- *		The open file descriptor of the VBISAM file (Not the dat file)
- *	int	iKeyNumber
- *		The index number in question
- *	struct	VBTREE	*psTree
- *		The VBTREE structure containing data to write with this call
- *	off_t	tNodeNumber
- *		The absolute node number within the index file (1..n)
- * Prerequisites:
- *	NONE
- * Returns:
- *	0	Success
- *	EBADFILE
- *	OTHER	As per sub function calls
- * Problems:
- *	NONE known
- */
-static	int
-iNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumber)
-{
-	char	*pcKeyEndPtr,
-		*pcNodePtr,
-		*pcNodeHalfway,
-		*pcNodeEnd,
-		*pcPrevKey = (char *) 0;
-	int	iCountLC = 0,		// Leading compression
-		iCountTC = 0,		// Trailing compression
-		iLastTC = 0,
-		iKeyLen,
-		iMaxTC,
-		iResult;
-	struct	VBKEY
-		*psKey,
-		*psKeyHalfway = VBKEY_NULL;
-	struct	keydesc
-		*psKeydesc;
-
-	pcNodeHalfway = cNode0 + (psVBFile [iHandle]->iNodeSize / 2);
-	pcNodeEnd = cNode0 + psVBFile [iHandle]->iNodeSize - 2;
-	psKeydesc = psVBFile [iHandle]->psKeydesc[iKeyNumber];
-	memset (cNode0, 0, MAX_NODE_LENGTH);
-#if	_FILE_OFFSET_BITS == 64
-	stquad (ldquad (psVBFile [iHandle]->sDictNode.cTransNumber) + 1, cNode0 + INTSIZE);
-	pcNodePtr = cNode0 + INTSIZE + QUADSIZE;
-#else	// _FILE_OFFSET_BITS == 64
-	pcNodePtr = cNode0 + INTSIZE;
-#endif	// _FILE_OFFSET_BITS == 64
-	*pcNodeEnd = psTree->sFlags.iLevel;
-	for (psKey = psTree->psKeyFirst; psKey && !psKey->sFlags.iIsDummy; psKey = psKey->psNext)
-	{
-		if (!psKeyHalfway)
-			if (pcNodePtr >= pcNodeHalfway)
-				psKeyHalfway = psKey->psPrev;
-		iKeyLen = psKeydesc->iKeyLength;
-		if (psKeydesc->iFlags & TCOMPRESS)
-		{
-			iLastTC = iCountTC;
-			iCountTC = 0;
-			pcKeyEndPtr = psKey->cKey + iKeyLen - 1;
-			while (*pcKeyEndPtr-- == TCC && pcKeyEndPtr != psKey->cKey)
-				iCountTC++;
-#if	_FILE_OFFSET_BITS == 64
-			iKeyLen += INTSIZE - iCountTC;
-#else	// _FILE_OFFSET_BITS == 64
-			iKeyLen += 1 - iCountTC;
-#endif	// _FILE_OFFSET_BITS == 64
-		}
-		if (psKeydesc->iFlags & LCOMPRESS)
-		{
-			iCountLC = 0;
-			if (psKey != psTree->psKeyFirst)
-			{
-				iMaxTC = psKeydesc->iKeyLength - (iCountTC > iLastTC ? iCountTC : iLastTC);
-				for (; psKey->cKey [iCountLC] == pcPrevKey [iCountLC] && iCountLC < iMaxTC; iCountLC++)
-						;
-			}
-#if	_FILE_OFFSET_BITS == 64
-			iKeyLen += INTSIZE - iCountLC;
-#else	// _FILE_OFFSET_BITS == 64
-			iKeyLen += 1 - iCountLC;
-#endif	// _FILE_OFFSET_BITS == 64
-			if (psKey->sFlags.iIsHigh && psKeydesc->iFlags && LCOMPRESS)
-			{
-				iCountLC = psKeydesc->iKeyLength;
-				iCountTC = 0;
-#if	_FILE_OFFSET_BITS == 64
-				iKeyLen = INTSIZE * 2;
-#else	// _FILE_OFFSET_BITS == 64
-				iKeyLen = 2;
-#endif	// _FILE_OFFSET_BITS == 64
-				if (psKeydesc->iFlags & DCOMPRESS)
-					iKeyLen = 0;
-			}
-		}
-		if (psKeydesc->iFlags & ISDUPS)
-		{
-			iKeyLen += QUADSIZE;
-			// If the key is a duplicate and it's not first in node
-			if ((psKey->sFlags.iIsHigh) || (psKey != psTree->psKeyFirst && !memcmp (psKey->cKey, pcPrevKey, psKeydesc->iKeyLength)))
-				if (psKeydesc->iFlags & DCOMPRESS)
-					iKeyLen = QUADSIZE;
-		}
-		iKeyLen += QUADSIZE;
-		// Split?
-		if (pcNodePtr + iKeyLen >= pcNodeEnd - 1)
-		{
-			if (psTree->psKeyLast->psPrev->sFlags.iIsNew)
-				psKeyHalfway = psTree->psKeyLast->psPrev->psPrev;
-			if (psTree->psKeyLast->psPrev->sFlags.iIsHigh && psTree->psKeyLast->psPrev->psPrev->sFlags.iIsNew)
-				psKeyHalfway = psTree->psKeyLast->psPrev->psPrev->psPrev;
-			iResult = iNodeSplit (iHandle, iKeyNumber, psTree, psKeyHalfway);
-			return (iResult);
-		}
-		if (((iKeyLen == (QUADSIZE * 2)) && ((psKeydesc->iFlags & (DCOMPRESS | ISDUPS)) == (DCOMPRESS | ISDUPS))) || (psKeydesc->iFlags & DCOMPRESS && !(psKeydesc->iFlags & ISDUPS) && iKeyLen == QUADSIZE))
-			*(pcNodePtr - QUADSIZE) |= 0x80;
-		else
-		{
-			if (psKeydesc->iFlags & LCOMPRESS)
-			{
-#if	_FILE_OFFSET_BITS == 64
-				stint (iCountLC, pcNodePtr);
-				pcNodePtr += INTSIZE;
-#else	// _FILE_OFFSET_BITS == 64
-				*pcNodePtr++ = iCountLC;
-#endif	// _FILE_OFFSET_BITS == 64
-			}
-			if (psKeydesc->iFlags & TCOMPRESS)
-			{
-#if	_FILE_OFFSET_BITS == 64
-				stint (iCountTC, pcNodePtr);
-				pcNodePtr += INTSIZE;
-#else	// _FILE_OFFSET_BITS == 64
-				*pcNodePtr++ = iCountTC;
-#endif	// _FILE_OFFSET_BITS == 64
-			}
-			if (iCountLC != psKeydesc->iKeyLength)
-			{
-				pcPrevKey = psKey->cKey + iCountLC;
-				iMaxTC = psKeydesc->iKeyLength - (iCountLC + iCountTC);
-				while (iMaxTC--)
-					*pcNodePtr++ = *pcPrevKey++;
-			}
-			pcPrevKey = psKey->cKey;
-		}
-		if (psKeydesc->iFlags & ISDUPS)
-		{
-#if	_FILE_OFFSET_BITS == 64
-			*pcNodePtr++ = (psKey->tDupNumber >> 56) & 0xff;
-			*pcNodePtr++ = (psKey->tDupNumber >> 48) & 0xff;
-			*pcNodePtr++ = (psKey->tDupNumber >> 40) & 0xff;
-			*pcNodePtr++ = (psKey->tDupNumber >> 32) & 0xff;
-#endif	// _FILE_OFFSET_BITS == 64
-			*pcNodePtr++ = (psKey->tDupNumber >> 24) & 0xff;
-			*pcNodePtr++ = (psKey->tDupNumber >> 16) & 0xff;
-			*pcNodePtr++ = (psKey->tDupNumber >> 8) & 0xff;
-			*pcNodePtr++ = psKey->tDupNumber & 0xff;
-		}
-#if	_FILE_OFFSET_BITS == 64
-		*pcNodePtr++ = (psKey->tRowNode >> 56) & 0xff;
-		*pcNodePtr++ = (psKey->tRowNode >> 48) & 0xff;
-		*pcNodePtr++ = (psKey->tRowNode >> 40) & 0xff;
-		*pcNodePtr++ = (psKey->tRowNode >> 32) & 0xff;
-#endif	// _FILE_OFFSET_BITS == 64
-		*pcNodePtr++ = (psKey->tRowNode >> 24) & 0xff;
-		*pcNodePtr++ = (psKey->tRowNode >> 16) & 0xff;
-		*pcNodePtr++ = (psKey->tRowNode >> 8) & 0xff;
-		*pcNodePtr++ = psKey->tRowNode & 0xff;
-	}
-	stint (pcNodePtr - cNode0, cNode0);
-	//iResult = iVBNodeWrite (iHandle, (char *) cNode0, tNodeNumber);
-	iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cNode0);
-	if (iResult)
-		return (iResult);
-	return (0);
-}
-
-/*
- * Name:
- *	static	int	iNodeSplit (int iHandle, int iKeyNumber, struct VBTREE *psTree, struct VBKEY *psKeyHalfway);
- * Arguments:
- *	int	iHandle
- *		The open file descriptor of the VBISAM file (Not the dat file)
- *	int	iKeyNumber
- *		The index number in question
- *	struct	VBTREE	*psTree
- *		The VBTREE structure containing data to split with this call
- *	struct	VBKEY	*psKeyHalfway
- *		A pointer within the psTree defining WHERE to split
- * Prerequisites:
- *	NONE
- * Returns:
- *	0	Success
- *	OTHER	As per sub function calls
- * Problems:
- *	NONE known
- */
-static	int
-iNodeSplit (int iHandle, int iKeyNumber, struct VBTREE *psTree, struct VBKEY *psKeyHalfway)
-{
-	int	iResult;
-	struct	VBKEY
-		*psKey,
-		*psKeyTemp,
-		*psHoldKeyCurr,
-		*psNewKey,
-		*psRootKey [3];
-	struct	VBTREE
-		*psNewTree,
-		*psRootTree = VBTREE_NULL;
-	off_t	tNewNode1,
-		tNewNode2 = 0;
-
-	psNewTree = psVBTreeAllocate (iHandle);
-	if (!psNewTree)
-		return (errno);
-	psNewTree->psParent = psTree;
-	psNewKey = psVBKeyAllocate (iHandle, iKeyNumber);
-	if (!psNewKey)
-		return (errno);
-	if (psTree->sFlags.iIsRoot)
-	{
-		psRootTree = psVBTreeAllocate (iHandle);
-		if (!psRootTree)
-			return (errno);
-		psRootKey [0] = psVBKeyAllocate (iHandle, iKeyNumber);
-		if (!psRootKey [0])
-			return (errno);
-		psRootKey [1] = psVBKeyAllocate (iHandle, iKeyNumber);
-		if (!psRootKey [1])
-			return (errno);
-		psRootKey [2] = psVBKeyAllocate (iHandle, iKeyNumber);
-		if (!psRootKey [2])
-			return (errno);
-		tNewNode2 = tVBNodeAllocate (iHandle);
-		if (tNewNode2 == -1)
-			return (iserrno);
-	}
-	tNewNode1 = tVBNodeAllocate (iHandle);
-	if (tNewNode1 == -1)
-		return (iserrno);
-
-	if (psTree->sFlags.iIsRoot)
-	{
-		psNewTree->psKeyLast = psTree->psKeyLast;
-		psKey = psKeyHalfway->psNext;
-		psNewKey->psPrev = psKey->psPrev;
-		psNewKey->psParent = psKey->psParent;
-		psNewKey->sFlags.iIsDummy = 1;
-		psKey->psPrev->psNext = psNewKey;
-		psKey->psPrev = VBKEY_NULL;
-		psTree->psKeyLast = psNewKey;
-		psTree->psKeyCurr = psTree->psKeyFirst;
-		psNewTree->psKeyFirst = psNewTree->psKeyCurr = psKey;
-		psNewTree->sFlags.iLevel = psTree->sFlags.iLevel;
-		psNewTree->psParent = psTree->psParent;
-		psNewTree->sFlags.iIsEOF = psTree->sFlags.iIsEOF;
-		psTree->sFlags.iIsEOF = 0;
-		for (psKeyTemp = psKey; psKeyTemp; psKeyTemp = psKeyTemp->psNext)
-			psKeyTemp->psParent = psNewTree;
-		return (iNewRoot (iHandle, iKeyNumber, psTree, psNewTree, psRootTree, psRootKey, tNewNode1, tNewNode2));
-	}
-	else
-	{
-		psNewTree->psKeyFirst = psNewTree->psKeyCurr = psTree->psKeyFirst;
-		psNewTree->psKeyLast = psNewKey;
-		psTree->psKeyFirst = psTree->psKeyCurr = psKeyHalfway->psNext;
-		psKeyHalfway->psNext->psPrev = VBKEY_NULL;
-		psKeyHalfway->psNext = psNewKey;
-		psNewKey->psPrev = psKeyHalfway;
-		psNewKey->psNext = VBKEY_NULL;
-
-		psNewKey->sFlags.iIsDummy = 1;
-		for (psKey = psNewTree->psKeyFirst; psKey; psKey = psKey->psNext)
-		{
-			psKey->psParent = psNewTree;
-			if (psKey->psChild)
-				psKey->psChild->psParent = psNewTree;
-		}
-		psNewTree->sFlags.iLevel = psTree->sFlags.iLevel;
-		psNewTree->psParent = psTree->psParent;
-		psNewTree->sFlags.iIsTOF = psTree->sFlags.iIsTOF;
-		psTree->sFlags.iIsTOF = 0;
-		/*
-		 * psNewTree is the new LEAF node but is stored in the OLD node
-		 * psTree is the original node and contains the HIGH half
-		 */
-		psNewTree->tNodeNumber = tNewNode1;
-		iResult = iNodeSave (iHandle, iKeyNumber, psNewTree, psNewTree->tNodeNumber);
-		if (iResult)
-			return (iResult);
-		iResult = iNodeSave (iHandle, iKeyNumber, psTree, psTree->tNodeNumber);
-		if (iResult)
-			return (iResult);
-		psHoldKeyCurr = psVBFile [iHandle]->psKeyCurr [iKeyNumber];
-		psVBFile [iHandle]->psKeyCurr [iKeyNumber] = psNewKey->psParent->psParent->psKeyCurr;
-		iResult = iKeyInsert (iHandle, psKeyHalfway->psParent->psParent, iKeyNumber, psKeyHalfway->cKey, tNewNode1, psKeyHalfway->tDupNumber, psNewTree);
-		psVBFile [iHandle]->psKeyCurr [iKeyNumber] = psHoldKeyCurr;
-		if (iResult)
-			return (iResult);
-		psHoldKeyCurr->psParent->psKeyCurr = psHoldKeyCurr;
-	}
-	return (0);
-}
-
-/*
- * Name:
- *	static	int	iNewRoot (int iHandle, int iKeyNumber, struct VBTREE *psTree, struct VBTREE *psNewTree, struct VBTREE *psRootTree, struct VBKEY *psRootKey[], off_t tNewNode1, off_t tNewNode2)
- * Arguments:
- *	int	iHandle
- *		The open file descriptor of the VBISAM file (Not the dat file)
- *	int	iKeyNumber
- *		The index number in question
- *	struct	VBTREE	*psTree
- *		The VBTREE structure containing data to be used with this call
- *	struct	VBTREE	*psNewTree
- *		The VBTREE structure that will contain some of the data
- *	struct	VBKEY	*psRootKey []
- *		An array of three (3) keys to be filled in for the new root
- *	off_t	tNewNode1
- *		The receiving node number for some of the old root data
- *	off_t	tNewNode2
- *		The receiving node number for the rest of the old root data
- * Prerequisites:
- *	NONE
- * Returns:
- *	0	Success
- *	OTHER	As per sub function calls
- * Problems:
- *	NONE known
- */
-static	int
-iNewRoot (int iHandle, int iKeyNumber, struct VBTREE *psTree, struct VBTREE *psNewTree, struct VBTREE *psRootTree, struct VBKEY *psRootKey[], off_t tNewNode1, off_t tNewNode2)
-{
-	int	iResult;
-	struct	VBKEY
-		*psKey;
-
-	// Fill in the content for the new root node
-	psRootKey [0]->psNext = psRootKey [1];
-	psRootKey [1]->psNext = psRootKey [2];
-	psRootKey [2]->psPrev = psRootKey [1];
-	psRootKey [1]->psPrev = psRootKey [0];
-	psRootKey [0]->psParent = psRootKey [1]->psParent = psRootKey [2]->psParent = psRootTree;
-	psRootKey [0]->psChild = psTree;
-	psRootKey [1]->psChild = psNewTree;
-	psRootKey [0]->tRowNode = tNewNode2;
-	psRootKey [1]->tRowNode = tNewNode1;
-	psRootKey [1]->sFlags.iIsHigh = 1;
-	psRootKey [2]->sFlags.iIsDummy = 1;
-	memcpy (psRootKey [0]->cKey, psTree->psKeyLast->psPrev->cKey, psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength);
-	psRootKey [0]->tDupNumber = psTree->psKeyLast->psPrev->tDupNumber;
-	vHighValueKeySet (psVBFile [iHandle]->psKeydesc [iKeyNumber], psRootKey [1]->cKey);
-	/*
-	 * psRootTree is the new ROOT node
-	 * psNewTree is the new LEAF node
-	 * psTree is the original node (saved in a new place)
-	 */
-	psRootTree->psKeyFirst = psRootKey [0];
-	psRootTree->psKeyCurr = psRootKey [0];
-	psRootTree->psKeyLast = psRootKey [2];
-	psRootTree->tNodeNumber = psTree->tNodeNumber;
-	psRootTree->sFlags.iLevel = psTree->sFlags.iLevel + 1;
-	psRootTree->sFlags.iIsRoot = 1;
-	psRootTree->sFlags.iIsTOF = 1;
-	psRootTree->sFlags.iIsEOF = 1;
-	psTree->psParent = psRootTree;
-	psTree->tNodeNumber = tNewNode2;
-	psTree->sFlags.iIsRoot = 0;
-	psTree->sFlags.iIsEOF = 0;
-	psNewTree->psParent = psRootTree;
-	psNewTree->tNodeNumber = tNewNode1;
-	psNewTree->sFlags.iLevel = psTree->sFlags.iLevel;
-	psNewTree->sFlags.iIsEOF = 1;
-	psNewTree->psKeyCurr = psNewTree->psKeyFirst;
-	psVBFile [iHandle]-> psTree [iKeyNumber] = psRootTree;
-	for (psKey = psTree->psKeyFirst; psKey; psKey = psKey->psNext)
-		if (psKey->psChild)
-			psKey->psChild->psParent = psTree;
-	for (psKey = psNewTree->psKeyFirst; psKey; psKey = psKey->psNext)
-		if (psKey->psChild)
-			psKey->psChild->psParent = psNewTree;
-	iResult = iNodeSave (iHandle, iKeyNumber, psNewTree, psNewTree->tNodeNumber);
-	if (iResult)
-		return (iResult);
-	iResult = iNodeSave (iHandle, iKeyNumber, psTree, psTree->tNodeNumber);
-	if (iResult)
-		return (iResult);
-	return (iNodeSave (iHandle, iKeyNumber, psRootTree, psRootTree->tNodeNumber));
-}
-
-/*
- * Name:
- *	static	int	iKeyInsert (int iHandle, struct VBTREE *psTree, int iKeyNumber, char *pcKeyValue, off_t tRowNode, off_t tDupNumber, struct VBTREE *psChild);
- * Arguments:
- *	int	iHandle
- *		The open file descriptor of the VBISAM file (Not the dat file)
- *	struct	VBTREE	*psTree
- *		The VBTREE structure containing data to be used with this call
- *	int	iKeyNumber
- *		The index number in question
- *	char	*pcKeyValue
- *		The actual uncompressed key to insert
- *	off_t	tRowNode
- *		The row number (LEAF NODE) or node number to be inserted
- *	off_t	tDupNumber
- *		The duplicate number (0 = first)
- *	struct	VBTREE	*psChild
- *		The VBTREE structure that this new entry will point to
- * Prerequisites:
- *	NONE
- * Returns:
- *	0	Success
- *	OTHER	As per sub function calls
- * Problems:
- *	NONE known
- * Comments:
- *	Insert the key pcKeyValue into the index.
- *	Assumes that psVBFile [iHandle]->psTree [iKeyNumber] is setup
- *	Always inserts the key BEFORE psTree->psKeyCurr
- *	Sets psVBFile [iHandle]->psKeyCurr [iKeyNumber] to the newly added key
- */
-static	int
-iKeyInsert (int iHandle, struct VBTREE *psTree, int iKeyNumber, char *pcKeyValue, off_t tRowNode, off_t tDupNumber, struct VBTREE *psChild)
-{
-	int	iResult;
-	struct	VBKEY
-		*psKey;
-
-	psKey = psVBKeyAllocate (iHandle, iKeyNumber);
-	if (!psKey)
-		return (errno);
-	if (!psVBFile [iHandle]->psKeyCurr [iKeyNumber])
-		return (EBADFILE);
-	if (!psTree)
-		psTree = psVBFile [iHandle]->psKeyCurr [iKeyNumber]->psParent; 
-	psKey->psParent = psTree;
-	psKey->psChild = psChild;
-	psKey->tRowNode = tRowNode;
-	psKey->tDupNumber = tDupNumber;
-	psKey->sFlags.iIsNew = 1;
-	memcpy (psKey->cKey, pcKeyValue, psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength);
-	psKey->psNext = psTree->psKeyCurr;
-	psKey->psPrev = psTree->psKeyCurr->psPrev;
-	if (psTree->psKeyCurr->psPrev)
-		psTree->psKeyCurr->psPrev->psNext = psKey;
-	else
-		psTree->psKeyFirst = psKey;
-	psTree->psKeyCurr->psPrev = psKey;
-	psTree->psKeyCurr = psKey;
-	psVBFile [iHandle]->psKeyCurr [iKeyNumber] = psKey;
-	iResult = iNodeSave (iHandle, iKeyNumber, psKey->psParent, psKey->psParent->tNodeNumber);
-	psKey->sFlags.iIsNew = 0;
-	return (iResult);
-}
-
-/*
- * Name:
- *	static	int	iKeyDelete (int iHandle, int iKeyNumber);
- * Arguments:
- *	int	iHandle
- *		The open file descriptor of the VBISAM file (Not the dat file)
- *	int	iKeyNumber
- *		The index number in question
- * Prerequisites:
- *	NONE
- * Returns:
- *	0	Success
- *	OTHER	As per sub function calls
- * Problems:
- *	NONE known
- */
-static	int
-iKeyDelete (int iHandle, int iKeyNumber)
-{
-	int	iResult;
-	struct	VBKEY
-		*psKey,
-		*psKeyHold;
-	struct	VBTREE
-		*psTree,
-		*psTreeRoot;
-
-	psKey = psVBFile [iHandle]->psKeyCurr [iKeyNumber];
-	/*
-	 * We're going to *TRY* to keep the index buffer populated!
-	 * However, since it's technically feasible for the current node to be
-	 * removed in it's entirety, we can only do this if there is at least 1
-	 * other key in the node that's not the dummy entry.
-	 * Since the current key is guaranteed to be at the LEAF node level (0),
-	 * it's impossible to ever have an iIsHigh entry in the node.
-	 */
-	if (psVBFile [iHandle]->psKeyCurr [iKeyNumber]->psPrev)
-		psVBFile [iHandle]->psKeyCurr [iKeyNumber] = psVBFile [iHandle]->psKeyCurr [iKeyNumber]->psPrev;
-	else
-		if (psVBFile [iHandle]->psKeyCurr [iKeyNumber]->psNext && psVBFile [iHandle]->psKeyCurr [iKeyNumber]->psNext->sFlags.iIsDummy == 0)
-			psVBFile [iHandle]->psKeyCurr [iKeyNumber] = psVBFile [iHandle]->psKeyCurr [iKeyNumber]->psNext;
-		else
-			psVBFile [iHandle]->psKeyCurr [iKeyNumber] = VBKEY_NULL;
-	while (1)
-	{
-		psTree = psKey->psParent;
-		if (psKey->sFlags.iIsHigh)
-		{
-		// Handle removal of the high key in a node
-			if (psKey->psPrev)
-			{
-				psKey->psChild = psKey->psPrev->psChild;
-				psKey->tRowNode = psKey->psPrev->tRowNode;
-				psKey->tDupNumber = psKey->psPrev->tDupNumber;
-				psKey = psKey->psPrev;
-			}
-			else
-			{
-				iResult = iVBNodeFree (iHandle, psTree->tNodeNumber);	// BUG - didn't check iResult
-				psTree = psTree->psParent;
-				vVBTreeAllFree (iHandle, iKeyNumber, psTree->psKeyCurr->psChild);
-				psKey = psTree->psKeyCurr;
-				psKey->psChild = VBTREE_NULL;
-				continue;
-			}
-		}
-		if (psKey->psPrev)
-			psKey->psPrev->psNext = psKey->psNext;
-		else
-			psTree->psKeyFirst = psKey->psNext;
-		if (psKey->psNext)
-			psKey->psNext->psPrev = psKey->psPrev;
-		psKey->psParent = VBTREE_NULL;
-		psKey->psChild = VBTREE_NULL;
-		vVBKeyFree (iHandle, iKeyNumber, psKey);
-		if (!psTree->sFlags.iIsRoot && psTree->psKeyFirst->sFlags.iIsDummy)
-		{
-		// Handle removal of the last key in a node
-			iResult = iVBNodeFree (iHandle, psTree->tNodeNumber);	// BUG - didn't check iResult
-			psTree = psTree->psParent;
-			vVBTreeAllFree (iHandle, iKeyNumber, psTree->psKeyCurr->psChild);
-			psTree->psKeyCurr->psChild = VBTREE_NULL;
-			psKey = psTree->psKeyCurr;
-			continue;
-		}
-		break;
-	}
-	while (psTree->psKeyFirst->sFlags.iIsHigh && psTree->sFlags.iIsRoot)
-	{
-		psKey = psTree->psKeyFirst;
-		if (!psKey->psChild || psVBFile [iHandle]->sFlags.iIndexChanged)
-		{
-			if (!psKey->psChild)
-			{
-				psKey->psChild = psVBTreeAllocate (iHandle);
-				if (!psKey->psChild)
-					return (errno);
-				psKey->psChild->psParent = psKey->psParent;
-				if (psKey->psParent->sFlags.iIsTOF && psKey == psKey->psParent->psKeyFirst)
-					psKey->psChild->sFlags.iIsTOF = 1;
-				if (psKey->psParent->sFlags.iIsEOF && psKey == psKey->psParent->psKeyLast->psPrev)
-					psKey->psChild->sFlags.iIsEOF = 1;
-			}
-			psKeyHold = psKey;
-			iResult = iNodeLoad (iHandle, iKeyNumber, psKey->psChild, psKey->tRowNode, psTree->sFlags.iLevel);
-			if (iResult)
-			{
-			// Ooops, make sure the tree is not corrupt
-				vVBTreeAllFree (iHandle, iKeyNumber, psKeyHold->psChild);
-				psKeyHold->psChild = VBTREE_NULL;
-				return (iResult);
-			}
-		}
-		// Time to collapse the root node (Yippee!)
-		iResult = iVBNodeFree (iHandle, psTree->psKeyFirst->psChild->tNodeNumber);	// BUG - didn't check iResult
-		psTreeRoot = psTree->psKeyFirst->psChild;
-		psTreeRoot->tNodeNumber = psTree->tNodeNumber;
-		psTreeRoot->psParent = VBTREE_NULL;
-		psTreeRoot->sFlags.iIsTOF = 1;
-		psTreeRoot->sFlags.iIsEOF = 1;
-		psTreeRoot->sFlags.iIsRoot = 1;
-		psVBFile [iHandle]->psTree [iKeyNumber] = psTreeRoot;
-		psTree->psKeyFirst->psChild = VBTREE_NULL;
-		vVBTreeAllFree (iHandle, iKeyNumber, psTree);
-		psTree = psTreeRoot;
-		if (psTree->sFlags.iLevel)
-		{
-			psTree->psKeyLast->psPrev->sFlags.iIsHigh = 1;
-			vHighValueKeySet (psVBFile [iHandle]->psKeydesc [iKeyNumber], psTree->psKeyLast->psPrev->cKey);
-		}
-		iResult = iNodeSave (iHandle, iKeyNumber, psTree, psTree->tNodeNumber);	// Bug - didn't check result
-	}
-	iResult = iNodeSave (iHandle, iKeyNumber, psTree, psTree->tNodeNumber);	// BUG - didn't check iResult
-
-	return (0);
-}
-
-/*
- * Name:
- *	static	void	vLowValueKeySet (struct keydesc *psKeydesc, char *pcKeyValue)
- * Arguments:
- *	struct	keydesc	*psKeydesc
- *		The keydesc structure to use
- *	char	*pcKeyValue
- *		The receiving uncompressed key
- * Prerequisites:
- *	NONE
- * Returns:
- *	0	Success
- *	OTHER	As per sub function calls
- * Problems:
- *	NONE known
- */
-static	void
-vLowValueKeySet (struct keydesc *psKeydesc, char *pcKeyValue)
-{
-	char	cBuffer [QUADSIZE];
-	int	iPart,
-		iRemainder;
-
-	for (iPart = 0; iPart < psKeydesc->iNParts; iPart++)
-	{
-		switch (psKeydesc->sPart [iPart].iType & ~ISDESC)
-		{
-		case	CHARTYPE:
-			memset (pcKeyValue, 0, psKeydesc->sPart [iPart].iLength);
-			pcKeyValue += psKeydesc->sPart [iPart].iLength;
-			break;
-
-		case	INTTYPE:
-			iRemainder = psKeydesc->sPart [iPart].iLength;
-			while (iRemainder > 0)
-			{
-				stint (SHRT_MIN, pcKeyValue);
-				pcKeyValue += INTSIZE;
-				iRemainder -= INTSIZE;
-			}
-			break;
-
-		case	LONGTYPE:
-			iRemainder = psKeydesc->sPart [iPart].iLength;
-			while (iRemainder > 0)
-			{
-				stlong (LONG_MIN, pcKeyValue);
-				pcKeyValue += LONGSIZE;
-				iRemainder -= LONGSIZE;
-			}
-			break;
-
-		case	QUADTYPE:
-			memset (cBuffer, 0, QUADSIZE);
-			cBuffer [0] = 0x80;
-			iRemainder = psKeydesc->sPart [iPart].iLength;
-			while (iRemainder > 0)
-			{
-				memcpy (pcKeyValue, cBuffer, QUADSIZE);
-				pcKeyValue += QUADSIZE;
-				iRemainder -= QUADSIZE;
-			}
-			break;
-
-		case	FLOATTYPE:
-			iRemainder = psKeydesc->sPart [iPart].iLength;
-			while (iRemainder > 0)
-			{
-				stfloat (FLT_MIN, pcKeyValue);
-				pcKeyValue += FLOATSIZE;
-				iRemainder -= FLOATSIZE;
-			}
-			break;
-
-		case	DOUBLETYPE:
-			iRemainder = psKeydesc->sPart [iPart].iLength;
-			while (iRemainder > 0)
-			{
-				stint (DBL_MIN, pcKeyValue);
-				pcKeyValue += DOUBLESIZE;
-				iRemainder -= DOUBLESIZE;
-			}
-			break;
-
-		default:
-			fprintf (stderr, "HUGE ERROR! File %s, Line %d Type %d\n", __FILE__, __LINE__, psKeydesc->sPart [iPart].iType);
-			exit (1);
-		}
-	}
-}
-
-/*
- * Name:
- *	static	void	vHighValueKeySet (struct keydesc *psKeydesc, char *pcKeyValue)
- * Arguments:
- *	struct	keydesc	*psKeydesc
- *		The keydesc structure to use
- *	char	*pcKeyValue
- *		The receiving uncompressed key
- * Prerequisites:
- *	NONE
- * Returns:
- *	0	Success
- *	OTHER	As per sub function calls
- * Problems:
- *	NONE known
- */
-static	void
-vHighValueKeySet (struct keydesc *psKeydesc, char *pcKeyValue)
-{
-	char	cBuffer [QUADSIZE];
-	int	iPart,
-		iRemainder;
-
-	for (iPart = 0; iPart < psKeydesc->iNParts; iPart++)
-	{
-		switch (psKeydesc->sPart [iPart].iType & ~ISDESC)
-		{
-		case	CHARTYPE:
-			memset (pcKeyValue, 0xff, psKeydesc->sPart [iPart].iLength);
-			pcKeyValue += psKeydesc->sPart [iPart].iLength;
-			break;
-
-		case	INTTYPE:
-			iRemainder = psKeydesc->sPart [iPart].iLength;
-			while (iRemainder > 0)
-			{
-				stint (SHRT_MAX, pcKeyValue);
-				pcKeyValue += INTSIZE;
-				iRemainder -= INTSIZE;
-			}
-			break;
-
-		case	LONGTYPE:
-			iRemainder = psKeydesc->sPart [iPart].iLength;
-			while (iRemainder > 0)
-			{
-				stlong (LONG_MAX, pcKeyValue);
-				pcKeyValue += LONGSIZE;
-				iRemainder -= LONGSIZE;
-			}
-			break;
-
-		case	QUADTYPE:
-			memset (cBuffer, 0xff, QUADSIZE);
-			cBuffer [0] = 0x7f;
-			iRemainder = psKeydesc->sPart [iPart].iLength;
-			while (iRemainder > 0)
-			{
-				memcpy (pcKeyValue, cBuffer, QUADSIZE);
-				pcKeyValue += QUADSIZE;
-				iRemainder -= QUADSIZE;
-			}
-			break;
-
-		case	FLOATTYPE:
-			iRemainder = psKeydesc->sPart [iPart].iLength;
-			while (iRemainder > 0)
-			{
-				stfloat (FLT_MAX, pcKeyValue);
-				pcKeyValue += FLOATSIZE;
-				iRemainder -= FLOATSIZE;
-			}
-			break;
-
-		case	DOUBLETYPE:
-			iRemainder = psKeydesc->sPart [iPart].iLength;
-			while (iRemainder > 0)
-			{
-				stdbl (DBL_MAX, pcKeyValue);
-				pcKeyValue += DOUBLESIZE;
-				iRemainder -= DOUBLESIZE;
-			}
-			break;
-
-		default:
-			fprintf (stderr, "HUGE ERROR! File %s, Line %d Type %d\n", __FILE__, __LINE__, psKeydesc->sPart [iPart].iType);
-			exit (1);
-		}
-	}
-}
-
 #ifdef	DEBUG
 void
 vDumpKey (struct VBKEY *psKey, struct VBTREE *psTree, int iIndent)
@@ -2304,7 +1160,7 @@ vDumpKey (struct VBKEY *psKey, struct VBTREE *psTree, int iIndent)
 		(int) psKey->psChild & 0xffff,
 		psKey->tRowNode & 0xffff
 	);
-#endif	// _FILE_OFFSET_BITS == 64
+#endif	//_FILE_OFFSET_BITS == 64
 	fflush (stdout);
 	if (psKey == psTree->psKeyFirst)
 		printf (" 1ST");
