@@ -52,7 +52,7 @@ deccopy (dec_t *src, dec_t *dst)
 int
 deccvint (int i, dec_t *dp)
 {
-	if ((unsigned) i == VAL_DECPOSNULL(int))
+	if ((unsigned) i == (unsigned) VAL_DECPOSNULL(int))
 	{
 		dp->dec_pos = -1;
 		dp->dec_exp =  0;
@@ -209,7 +209,7 @@ deccvreal (double dbl, dec_t *dp, int ndigits)
 
 	while (--dgt >= dp->dec_dgts && *dgt == 0);
 
-	dp->dec_ndgts = 1 + (int) dgt - (int) dp->dec_dgts;
+	dp->dec_ndgts = 1 + dgt - dp->dec_dgts;
 
 	return (0);
 }
