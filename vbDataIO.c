@@ -8,9 +8,12 @@
  *	This module handles ALL the low level data file I/O operations for the
  *	VBISAM library.
  * Version:
- *	$Id: vbDataIO.c,v 1.5 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: vbDataIO.c,v 1.6 2004/01/06 14:31:59 trev_vb Exp $
  * Modification History:
  *	$Log: vbDataIO.c,v $
+ *	Revision 1.6  2004/01/06 14:31:59  trev_vb
+ *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
+ *	
  *	Revision 1.5  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -110,6 +113,7 @@ iVBDataRead (int iHandle, void *pvBuffer, int *piDeletedRow, off_t tRowNumber, i
 		if (iVBBlockRead (iHandle, FALSE, tBlockNumber + 1, cNode0))
 			return (EBADFILE);
 	}
+	pvBuffer += tSoFar;
 	// OK, now for the footer.  Either 1 byte or 1 + INTSIZE + QUADSIZE.
 	while (tSoFar < iRowLength)
 	{
@@ -133,9 +137,27 @@ iVBDataRead (int iHandle, void *pvBuffer, int *piDeletedRow, off_t tRowNumber, i
 	{
 		if (psVBFile [iHandle]->iOpenMode & ISVARLEN)
 		{
-		// BUG	Here's where we need to add in reading of ISVARLEN data
-		//	The relevant info is in cFooter[1-6]
-			isreclen++;
+			psVBFile [iHandle]->iVarlenLength = ldint (cFooter + 1);
+// VBISAM in 64 bit mode (4k Nodes) uses a ten bit slot number
+// VBISAM in 32 bit mode (1k Nodes) uses an eight bit slot number
+#if	_FILE_OFFSET_BITS == 64
+			psVBFile [iHandle]->iVarlenSlot = ldint (cFooter + 1 + INTSIZE) >> 6;
+			*(cFooter + 1 + INTSIZE + 1) &= 0x3f;
+# if	MAX_NODE_LENGTH != 4096
+BAD NODE LENGTH
+# endif	// MAX_NODE_LENGTH
+#else	// _FILE_OFFSET_BITS == 64
+			psVBFile [iHandle]->iVarlenSlot = *(cFooter + 1 + INTSIZE);
+# if	MAX_NODE_LENGTH != 1024
+BAD NODE LENGTH
+# endif	// MAX_NODE_LENGTH
+#endif	// _FILE_OFFSET_BITS == 64
+			*(cFooter + 1 + INTSIZE) = 0;
+			psVBFile [iHandle]->tVarlenNode = ldquad (cFooter + 1 + INTSIZE);
+			if (psVBFile [iHandle]->iVarlenLength)
+				if (iVBVarlenRead (iHandle, (char *) pvBuffer, psVBFile [iHandle]->tVarlenNode, psVBFile [iHandle]->iVarlenSlot, psVBFile [iHandle]->iVarlenLength))
+					return (iserrno);
+			isreclen += psVBFile [iHandle]->iVarlenLength;
 		}
 	}
 	return (0);
@@ -168,11 +190,11 @@ iVBDataRead (int iHandle, void *pvBuffer, int *piDeletedRow, off_t tRowNumber, i
 int
 iVBDataWrite (int iHandle, void *pvBuffer, int iDeletedRow, off_t tRowNumber, int iVarlen)
 {
+	char	*pcTemp;
 	int	iRowLength;
 	off_t	tBlockNumber,
 		tOffset,
-		tSoFar = 0,
-		tVarlenNode = 0;
+		tSoFar = 0;
 
 	// Sanity check - Is iHandle a currently open table?
 	if (iHandle < 0 || iHandle > iVBMaxUsedHandle)
@@ -189,19 +211,34 @@ iVBDataWrite (int iHandle, void *pvBuffer, int iDeletedRow, off_t tRowNumber, in
 	tOffset *= (tRowNumber - 1);
 	if (psVBFile [iHandle]->iOpenMode & ISVARLEN)
 	{
-// BUG	Here's where we should write out the VARLEN component and thus set
-//	the tVarlenNode variable.
-		;
+		if (psVBFile [iHandle]->tVarlenNode)
+			if (iVBVarlenDelete (iHandle, psVBFile [iHandle]->tVarlenNode, psVBFile [iHandle]->iVarlenSlot, psVBFile [iHandle]->iVarlenLength))
+				return (-69);
+		if (isreclen == psVBFile [iHandle]->iMinRowLength || iDeletedRow)
+		{
+			psVBFile [iHandle]->tVarlenNode = 0;
+			psVBFile [iHandle]->iVarlenLength = 0;
+			psVBFile [iHandle]->iVarlenSlot = 0;
+		}
+		else
+			if (iVBVarlenWrite (iHandle, pvBuffer + psVBFile [iHandle]->iMinRowLength, isreclen - psVBFile [iHandle]->iMinRowLength))
+				return (iserrno);
 	}
 	memcpy (pcWriteBuffer, pvBuffer, iRowLength);
 	*(pcWriteBuffer + iRowLength) = iDeletedRow ? 0x00 : 0x0a;
+	iRowLength++;
 	if (psVBFile [iHandle]->iOpenMode & ISVARLEN)
 	{
-		stint (isreclen, pcWriteBuffer + iRowLength + 1);
-		stquad (tVarlenNode, pcWriteBuffer + iRowLength + 1 + INTSIZE);
+		stint (psVBFile [iHandle]->iVarlenLength, pcWriteBuffer + iRowLength);
+		stquad (psVBFile [iHandle]->tVarlenNode, pcWriteBuffer + iRowLength + INTSIZE);
+		pcTemp = pcWriteBuffer + iRowLength + INTSIZE;
+#if	_FILE_OFFSET_BITS == 64
+		stint ((psVBFile [iHandle]->iVarlenSlot << 6) + ldint (pcTemp), pcTemp);
+#else	// _FILE_OFFSET_BITS == 64
+		*pcTemp = psVBFile [iHandle]->iVarlenSlot;
+#endif	// _FILE_OFFSET_BITS == 64
 		iRowLength += INTSIZE + QUADSIZE;
 	}
-	iRowLength++;
 
 	tBlockNumber = (tOffset / psVBFile [iHandle]->iNodeSize);
 	tOffset -= (tBlockNumber * psVBFile [iHandle]->iNodeSize);

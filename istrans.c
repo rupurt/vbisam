@@ -8,9 +8,12 @@
  *	This is the module that deals with all the transaction processing for
  *	a file in the VBISAM library.
  * Version:
- *	$Id: istrans.c,v 1.4 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: istrans.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
  * Modification History:
  *	$Log: istrans.c,v $
+ *	Revision 1.5  2004/01/06 14:31:59  trev_vb
+ *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
+ *	
  *	Revision 1.4  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -262,7 +265,6 @@ int	isrecover (void)
 		tRowNumber = ldquad (pcBuffer + INTSIZE);
 		if (!memcmp (psLogHeader->cOperation, VBL_FILEOPEN, 2))
 		{
-			// BUG? Errr, the handle should be closed!
 			if (iLocalHandle [iHandle] != -1)
 				return (-1);
 			iLocalHandle [iHandle] = isopen (pcBuffer + INTSIZE + INTSIZE, ISMANULOCK + ISINOUT);
@@ -271,7 +273,6 @@ int	isrecover (void)
 		}
 		if (!memcmp (psLogHeader->cOperation, VBL_FILECLOSE, 2))
 		{
-			// BUG? Errr, the handle should be open!
 			if (iLocalHandle [iHandle] == -1)
 				return (-1);
 			iLocalHandle [iHandle] = isclose (iHandle);
@@ -299,7 +300,7 @@ int	isrecover (void)
 			isreclen = ldint (pcBuffer + INTSIZE + QUADSIZE);
 			pcRow = pcBuffer + INTSIZE + QUADSIZE + INTSIZE + INTSIZE + isreclen;
 			isreclen = ldint (pcBuffer + INTSIZE + QUADSIZE + INTSIZE);
-			// BUG? - Should we READ the row first and compare it?
+			// BUG - Should we READ the row first and compare it?
 			if (isrewrec (iLocalHandle [iHandle], tRowNumber, pcRow))
 				return (-1);
 		}
@@ -307,7 +308,7 @@ int	isrecover (void)
 		{
 			if (iLocalHandle [iHandle] == -1)
 				return (-1);
-			// BUG? - Should we READ the row first and compare it?
+			// BUG - Should we READ the row first and compare it?
 			if (isdelrec (iLocalHandle [iHandle], tRowNumber))
 				return (-1);
 			iVBEnter (iLocalHandle [iHandle], TRUE);
@@ -993,9 +994,9 @@ vTransHdr (char *pcTransType)
 {
 	psLogHeader = (struct SLOGHDR *) cTransBuffer;
 	memcpy (psLogHeader->cOperation, pcTransType, 2);
-	stint (tVBPID, psLogHeader->cPID);	// BUG - Assumes pid_t is short
-	stint (tVBUID, psLogHeader->cUID);	// BUG - Assumes uid_t is short
-	stlong (time ((time_t *) 0), psLogHeader->cTime);	// BUG - Assumes time_t is long
+	stint (tVBPID, psLogHeader->cPID);	// Assumes pid_t is short
+	stint (tVBUID, psLogHeader->cUID);	// Assumes uid_t is short
+	stlong (time ((time_t *) 0), psLogHeader->cTime);	// Assumes time_t is long
 	stint (0, psLogHeader->cRFU1);		// BUG - WTF is this?
 }
 
@@ -1106,7 +1107,8 @@ iWriteBegin (void)
 static	int
 iDemoteLocks (void)
 {
-	int	iHandle;
+	int	iHandle,
+		iResult = 0;
 
 	for (iHandle = 0; iHandle <= iVBMaxUsedHandle; iHandle++)
 	{
@@ -1117,9 +1119,12 @@ iDemoteLocks (void)
 		if (psVBFile [iHandle]->sFlags.iIsDataLocked)
 			continue;
 		// Rather a carte-blanche method huh?
-		iVBDataLock (iHandle, VBUNLOCK, 0, TRUE);	// BUG Result check
+		if (iVBDataLock (iHandle, VBUNLOCK, 0, TRUE))
+			iResult = -1;
 	}
-	return (0);
+	if (iResult)
+		iserrno = EBADFILE;
+	return (iResult);
 }
 
 /*
@@ -1203,7 +1208,6 @@ iRollMeBack (off_t tOffset)
 		tRowNumber = ldquad (pcBuffer + INTSIZE);
 		if (!memcmp (psLogHeader->cOperation, VBL_FILECLOSE, 2))
 		{
-			// BUG? Errr, the closed handle should STILL be closed!
 			if (iLocalHandle [iHandle] != -1)
 				return (EBADFILE);
 			iLocalHandle [iHandle] = isopen (pcBuffer + INTSIZE + INTSIZE, ISMANULOCK + ISINOUT);
@@ -1335,7 +1339,6 @@ iRollMeForward (off_t tOffset)
 		tRowNumber = ldquad (pcBuffer + INTSIZE);
 		if (!memcmp (psLogHeader->cOperation, VBL_FILECLOSE, 2))
 		{
-			// BUG? Errr, the closed handle should STILL be closed!
 			if (iLocalHandle [iHandle] != -1)
 				return (EBADFILE);
 			iLocalHandle [iHandle] = isopen (pcBuffer + INTSIZE + INTSIZE, ISMANULOCK + ISINOUT);

@@ -8,9 +8,12 @@
  *	This is the module that deals with all the reading from a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isread.c,v 1.4 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: isread.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
  * Modification History:
  *	$Log: isread.c,v $
+ *	Revision 1.5  2004/01/06 14:31:59  trev_vb
+ *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
+ *	
  *	Revision 1.4  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -102,7 +105,6 @@ isread (int iHandle, char *pcRow, int iMode)
 			memcpy (pcRow, *(psVBFile [iHandle]->ppcRowBuffer), psVBFile [iHandle]->iMinRowLength);
 			psVBFile [iHandle]->sFlags.iIsDisjoint = 0;
 		}
-		// BUG - varlen additions?
 		goto ReadExit;
 	}
 	iserrno = 0;
@@ -480,7 +482,7 @@ iStartRowNumber (int iHandle, int iMode, int iIsRead)
 					iLockResult = ELOCKED;
 			}
 			if (!iLockResult)
-				iResult = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, isrecnum, FALSE);
+				iResult = iVBDataRead (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), &iDeleted, isrecnum, TRUE);
 			if (iResult)
 			{
 				isrecnum = 0;

@@ -8,9 +8,12 @@
  *	This module handles the locking on both the index and data files for the
  *	VBISAM library.
  * Version:
- *	$Id: vbLocking.c,v 1.4 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: vbLocking.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
  * Modification History:
  *	$Log: vbLocking.c,v $
+ *	Revision 1.5  2004/01/06 14:31:59  trev_vb
+ *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
+ *	
  *	Revision 1.4  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -219,6 +222,7 @@ iVBExit (int iHandle)
 		else
 			iVBBufferLevel = 4;
 	}
+	iVBBlockFlush (iHandle);
 	for (iLoop2 = 0; iLoop2 < psVBFile [iHandle]->iNKeys; iLoop2++)
 	{
 		struct	VBKEY
@@ -296,6 +300,7 @@ iVBForceExit (int iHandle)
 		else
 			iserrno = 0;
 	}
+	iVBBlockFlush (iHandle);
 	psVBFile [iHandle]->sFlags.iIsDictLocked = 0;
 	return (0);
 }
@@ -360,7 +365,7 @@ iVBFileOpenLock (int iHandle, int iMode)
 	}
 
 	// Whether we're locking *OR* unlocking a region, retry forever on EINTR
-	// BUG? - This *MAY* be a potential race condition?
+	// This *MAY* be a potential race condition?
 	do
 	{
 		iResult = iVBLock (psVBFile [iHandle]->iIndexHandle, tOffset, 1, iLockType);
@@ -415,7 +420,7 @@ iVBDataLock (int iHandle, int iMode, off_t tRowNumber, int iIsTransaction)
 	/*
 	 * If this is a FILE lock (row = 0), then we may as well free up any
 	 * other existing locks.
-	 * BUG: What if some of those locks were within a transaction?
+	 * If some of those locks were within a transaction then TOUGH!
 	 */
 	if (tRowNumber == 0)
 	{

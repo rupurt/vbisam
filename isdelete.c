@@ -8,9 +8,12 @@
  *	This is the module that deals with all the deleting from a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isdelete.c,v 1.4 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: isdelete.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
  * Modification History:
  *	$Log: isdelete.c,v $
+ *	Revision 1.5  2004/01/06 14:31:59  trev_vb
+ *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
+ *	
  *	Revision 1.4  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -63,7 +66,7 @@ isdelete (int iHandle, char *pcRow)
 		return (-1);
 
 	if (psVBFile [iHandle]->psKeydesc [0]->iFlags & ISDUPS)
-		iserrno = ENOREC;
+		iserrno = ENOPRIM;
 	else
 	{
 		vVBMakeKey (iHandle, 0, pcRow, cKeyValue);
@@ -83,7 +86,7 @@ isdelete (int iHandle, char *pcRow)
 			if (!iResult)
 			{
 				if (iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
-					iVBTransDelete (iHandle, tRowNumber, psVBFile [iHandle]->iMinRowLength);	// BUG - not varlen compliant
+					iVBTransDelete (iHandle, tRowNumber, isreclen);
 				memset ((void *) *(psVBFile [iHandle]->ppcRowBuffer), 0, psVBFile [iHandle]->iMinRowLength + QUADSIZE);
 				iserrno = iVBDataWrite (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), TRUE, tRowNumber, TRUE);
 				if (iserrno)
@@ -161,7 +164,7 @@ isdelcurr (int iHandle)
 		if (!iResult)
 		{
 			if (iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
-				iVBTransDelete (iHandle, psVBFile [iHandle]->tRowNumber, psVBFile [iHandle]->iMinRowLength);	// BUG - not varlen compliant
+				iVBTransDelete (iHandle, psVBFile [iHandle]->tRowNumber, isreclen);
 			memset ((void *) *(psVBFile [iHandle]->ppcRowBuffer), 0, psVBFile [iHandle]->iMinRowLength + QUADSIZE);
 			iserrno = iVBDataWrite (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), TRUE, psVBFile [iHandle]->tRowNumber, TRUE);
 			if (iserrno)
@@ -226,7 +229,7 @@ isdelrec (int iHandle, off_t tRowNumber)
 		if (!iResult)
 		{
 			if (iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
-				iVBTransDelete (iHandle, tRowNumber, psVBFile [iHandle]->iMinRowLength);	// BUG - not varlen compliant
+				iVBTransDelete (iHandle, tRowNumber, isreclen);
 			memset ((void *) *(psVBFile [iHandle]->ppcRowBuffer), 0, psVBFile [iHandle]->iMinRowLength + QUADSIZE);
 			iserrno = iVBDataWrite (iHandle, (void *) *(psVBFile [iHandle]->ppcRowBuffer), TRUE, tRowNumber, TRUE);
 			if (iserrno)

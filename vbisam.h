@@ -8,9 +8,12 @@
  *	This is the header that defines all the various structures et al for
  *	the VBISAM library.
  * Version:
- *	$Id: vbisam.h,v 1.5 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: vbisam.h,v 1.6 2004/01/06 14:31:59 trev_vb Exp $
  * Modification History:
  *	$Log: vbisam.h,v $
+ *	Revision 1.6  2004/01/06 14:31:59  trev_vb
+ *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
+ *	
  *	Revision 1.5  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -207,23 +210,17 @@ extern	int	iserrno,	// Isam error return code
 extern	off_t	isrecnum;	// Current row number
 struct	audhead
 {
-	char	au_type [2];	// Audit row type aa,dd,rr,ww
-	char	au_time [4];	// Audit date-time
-	char	au_procid [2];	// Process id number
-	char	au_userid [2];	// User id number
-	char	au_recnum [8];	// Row number
-#if	0
-FIXME BEGIN
-	char	au_reclen [2?];	// audit row length beyond header
-FIXME END
-#endif
+	char	au_type [2];		// Audit row type aa,dd,rr,ww
+	char	au_time [LONGSIZE];	// Audit date-time
+	char	au_procid [INTSIZE];	// Process id number
+	char	au_userid [INTSIZE];	// User id number
+	char	au_recnum [QUADSIZE];	// Row number
+	char	au_reclen [INTSIZE];	// audit row length beyond header
 };
-#define	AUDHEADSIZE	18	// Number of bytes in audit header
-#if	0
-FIXME BEGIN
-#define	VAUDHEADSIZE	20?	// VARLEN num of bytes in audit header
-FIXME END
-#endif
+// Number of bytes in audit header
+#define	AUDHEADSIZE	(2+LONGSIZE+INTSIZE+INTSIZE+QUADSIZE)
+// VARLEN num of bytes in audit header
+#define	VAUDHEADSIZE	(2+LONGSIZE+INTSIZE+INTSIZE+QUADSIZE+INTSIZE)
 #ifdef	__STDC__
 // Prototypes for file manipulation functions
 int	isaddindex (int iHandle, struct keydesc *psKeyDescription);
@@ -247,7 +244,9 @@ int	islogopen (char *pcLogFilename);
 int	isopen (char *pcFilename, int iMode);
 int	isread (int iHandle, char *pcRow, int iMode);
 int	isrecover (void);
+int	isrelcurr (int iHandle);
 int	isrelease (int iHandle);
+int	isrelrec (int iHandle, off_t tRowNumber);
 int	isrename (char *pcOldFilename, char *pcNewFilename);
 int	isrewcurr (int iHandle, char *pcRow);
 int	isrewrec (int iHandle, off_t tRowNumber, char *pcRow);

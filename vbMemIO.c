@@ -8,9 +8,12 @@
  *	This is the module that deals with *ALL* memory (de-)allocation for the
  *	VBISAM library.
  * Version:
- *	$Id: vbMemIO.c,v 1.5 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: vbMemIO.c,v 1.6 2004/01/06 14:31:59 trev_vb Exp $
  * Modification History:
  *	$Log: vbMemIO.c,v $
+ *	Revision 1.6  2004/01/06 14:31:59  trev_vb
+ *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
+ *	
  *	Revision 1.5  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -26,9 +29,6 @@
  *	
  *	Revision 1.1.1.1  2003/12/20 20:11:20  trev_vb
  *	Init import
- *	
- * BUG - We need to add in a 'garbage collection' function in this module to
- * BUG -  traverse the various free lists periodically and free them up.
  */
 #define	VBISAMMAIN
 #include	"isinternal.h"
@@ -311,12 +311,7 @@ vVBKeyUnMalloc (int iHandle, int iKeyNumber)
  *	OTHER
  *		Pointer to the allocated memory
  * Problems:
- *	DONE BUG - We need to extend this function a LOT:
- *	DONE BUG - If the malloc call FAILS (ENOMEM), than we firstly free
- *	DONE BUG - all the entries in the various free lists.  Also, we can free
- *	DONE BUG - up any of the VBTREE / VBKEY lists on ANY open VBISAM file
- *	DONE BUG - where the current transaction number is now stale!
- *	DONE BUG - THEN we should retry the malloc
+ *	None known
  */
 void	*
 pvVBMalloc (size_t tLength)

@@ -9,9 +9,12 @@
  *	Only functions with external linkage (i.e. is*, ld* and st*) should be
  *	defined within this module.
  * Version:
- *	$Id: isHelper.c,v 1.4 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: isHelper.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
  * Modification History:
  *	$Log: isHelper.c,v $
+ *	Revision 1.5  2004/01/06 14:31:59  trev_vb
+ *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
+ *	
  *	Revision 1.4  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -35,7 +38,9 @@ int	iscluster (int, struct keydesc *);
 int	iserase (char *);
 int	isflush (int);
 int	islock (int);
+int	isrelcurr (int);		// Added for JvN
 int	isrelease (int);
+int	isrelrec (int, off_t);		// Added for JvN
 int	isrename (char *, char *);
 int	issetunique (int, off_t);
 int	isuniqueid (int, off_t *);
@@ -129,7 +134,7 @@ EraseExit:
 int
 isflush (int iHandle)
 {
-	return (0);
+	return (iVBBlockFlush (iHandle));
 }
 
 /*
@@ -154,6 +159,55 @@ islock (int iHandle)
 
 /*
  * Name:
+ *	int	isrelcurr (int iHandle)
+ * Arguments:
+ *	int	iHandle
+ *		The handle of a currently open VBISAM file
+ * Prerequisites:
+ *	NONE
+ * Returns:
+ *	0	Success
+ *	-1	Failure (iserrno has more info)
+ * Problems:
+ *	We can NOT do a vVBEnter / vVBExit here as this is called from
+ *	OTHER is* functions (isstart and isread)
+ */
+int
+isrelcurr (int iHandle)
+{
+	struct	VBLOCK
+		*psLock,
+		*psLockNext;
+
+	if (!psVBFile [iHandle])
+	{
+		iserrno = ENOTOPEN;
+		return (-1);
+	}
+	if (psVBFile [iHandle]->tRowNumber)
+	{
+		iserrno = ENOREC;
+		return (-1);
+	}
+	psLock = psVBFile [iHandle]->psLockHead;
+	while (psLock)
+	{
+		psLockNext = psLock->psNext;
+		if (psLock->iIsTransaction)
+			return (0);
+		if (psLock->tRowNumber != psVBFile [iHandle]->tRowNumber)
+			continue;
+// Note: this implicitly relies on the following to reset the psLockHead / Tail
+		iserrno = iVBDataLock (iHandle, VBUNLOCK, psLock->tRowNumber, FALSE);
+		if (iserrno)
+			return (-1);
+		psLock = psLockNext;
+	}
+	return (0);
+}
+
+/*
+ * Name:
  *	int	isrelease (int iHandle)
  * Arguments:
  *	int	iHandle
@@ -174,12 +228,63 @@ isrelease (int iHandle)
 		*psLock,
 		*psLockNext;
 
+	if (!psVBFile [iHandle])
+	{
+		iserrno = ENOTOPEN;
+		return (-1);
+	}
 	psLock = psVBFile [iHandle]->psLockHead;
 	while (psLock)
 	{
 		psLockNext = psLock->psNext;
 		if (psLock->iIsTransaction)
 			return (0);
+// Note: this implicitly relies on the following to reset the psLockHead / Tail
+		iserrno = iVBDataLock (iHandle, VBUNLOCK, psLock->tRowNumber, FALSE);
+		if (iserrno)
+			return (-1);
+		psLock = psLockNext;
+	}
+	return (0);
+}
+
+/*
+ * Name:
+ *	int	isrelrec (int iHandle, off_t tRowNumber)
+ * Arguments:
+ *	int	iHandle
+ *		The handle of a currently open VBISAM file
+ *	off_t	tRowNumber
+ *		The absolute rowid of the row to be unlocked
+ * Prerequisites:
+ *	NONE
+ * Returns:
+ *	0	Success
+ *	-1	Failure (iserrno has more info)
+ * Problems:
+ *	We can NOT do a vVBEnter / vVBExit here as this is called from
+ *	OTHER is* functions (isstart and isread)
+ */
+int
+isrelrec (int iHandle, off_t tRowNumber)
+{
+	struct	VBLOCK
+		*psLock,
+		*psLockNext;
+
+	if (!psVBFile [iHandle])
+	{
+		iserrno = ENOTOPEN;
+		return (-1);
+	}
+	psLock = psVBFile [iHandle]->psLockHead;
+	while (psLock)
+	{
+		psLockNext = psLock->psNext;
+		if (psLock->iIsTransaction)
+			return (0);
+		if (psLock->tRowNumber != tRowNumber)
+			continue;
 // Note: this implicitly relies on the following to reset the psLockHead / Tail
 		iserrno = iVBDataLock (iHandle, VBUNLOCK, psLock->tRowNumber, FALSE);
 		if (iserrno)

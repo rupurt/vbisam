@@ -1,0 +1,19 @@
+06Jan2004 1.01Beta
+------------------
+Added COPYING.LIB and License line to each module header
+(Thanks to Johann von Nepomuk for spotting this huge oversight on my part!)
+
+Changed VBBLOCK based functions in vbLowLevel.c to delay writing back to the
+disk files while the index is 'locked' for use.  (Limits the number of system
+calls performed.  This *REALLY* has a HUGE impact if ISEXCLLOCK is used!
+
+Implemented variable length row processing
+HUGE warning...  This is not 100% compatible with the competition from IBM.
+Therefore, if you the bcheck utility from IBM, it *MAY* report issues with the
+variable length nodes in the index file.  This is because the IBM product uses
+a *STUPID* algorithm for determining which 'group' a variable length node with
+some free space left should belong to.  (Namely, IBM appears to have cutoffs at
+200bytes, 400bytes, 600bytes and 800bytes.  I have chosen to use a logarithmic
+approach instead with cutoffs at 8bytes, 32bytes, 128bytes and 512bytes)
+To put it MILDLY, the varlen code should be considered 'UNSTABLE' in this
+release.

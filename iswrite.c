@@ -8,9 +8,12 @@
  *	This is the module that deals with all the writing to a file in the
  *	VBISAM library.
  * Version:
- *	$Id: iswrite.c,v 1.4 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: iswrite.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
  * Modification History:
  *	$Log: iswrite.c,v $
+ *	Revision 1.5  2004/01/06 14:31:59  trev_vb
+ *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
+ *	
  *	Revision 1.4  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -61,6 +64,12 @@ iswrcurr (int iHandle, char *pcRow)
 	if (iResult)
 		return (iResult);
 
+	if (psVBFile [iHandle]->iOpenMode & ISVARLEN && (isreclen > psVBFile [iHandle]->iMaxRowLength || isreclen < psVBFile [iHandle]->iMinRowLength))
+	{
+		iserrno = EBADARG;
+		return (-1);
+	}
+
 	tRowNumber = tVBDataCountGetNext (iHandle);
 	if (tRowNumber == -1)
 		return (-1);
@@ -99,6 +108,12 @@ iswrite (int iHandle, char *pcRow)
 	if (iResult)
 		return (iResult);
 
+	if (psVBFile [iHandle]->iOpenMode & ISVARLEN && (isreclen > psVBFile [iHandle]->iMaxRowLength || isreclen < psVBFile [iHandle]->iMinRowLength))
+	{
+		iserrno = EBADARG;
+		return (-1);
+	}
+
 	tRowNumber = tVBDataCountGetNext (iHandle);
 	if (tRowNumber == -1)
 		return (-1);
@@ -136,7 +151,10 @@ iVBWriteRow (int iHandle, char *pcRow, off_t tRowNumber)
 	if (iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
 		iResult = iVBDataLock (iHandle, VBWRLOCK, tRowNumber, TRUE);
 	if (!iResult)
+	{
+		psVBFile [iHandle]->tVarlenNode = 0;	// Stop it from removing
 		iResult = iVBDataWrite (iHandle, (void *) pcRow, FALSE, tRowNumber, TRUE);
+	}
 	if (iResult)
 	{
 		iserrno = iResult;
@@ -144,6 +162,8 @@ iVBWriteRow (int iHandle, char *pcRow, off_t tRowNumber)
 	}
 	iResult = iVBRowInsert (iHandle, pcRow, tRowNumber);
 	if (!iResult && iVBLogfileHandle != -1 && !(psVBFile [iHandle]->iOpenMode & ISNOLOG))
-		iVBTransInsert (iHandle, tRowNumber, psVBFile [iHandle]->iMinRowLength, pcRow);	// BUG - Not varlen compliant
+		iResult = iVBTransInsert (iHandle, tRowNumber, isreclen, pcRow);
+	if (!iResult)
+		iserrno = 0;
 	return (iResult);
 }

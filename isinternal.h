@@ -8,9 +8,12 @@
  *	This is the header that defines the internally used structures for the
  *	VBISAM library.
  * Version:
- *	$Id: isinternal.h,v 1.5 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: isinternal.h,v 1.6 2004/01/06 14:31:59 trev_vb Exp $
  * Modification History:
  *	$Log: isinternal.h,v $
+ *	Revision 1.6  2004/01/06 14:31:59  trev_vb
+ *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
+ *	
  *	Revision 1.5  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -65,6 +68,8 @@
 #  define	MAX_NODE_LENGTH	1024
 # endif	// _FILE_OFFSET_BITS == 64
 #endif	// DEV
+#define	SLOTS_PER_NODE	((MAX_NODE_LENGTH >> 2) - 1)	// Used in vbVarlenIO.c
+
 #define	MAX_KEYS_PER_NODE	((MAX_NODE_LENGTH - (4 + (INTSIZE * 2) + QUADSIZE)) / ((INTSIZE * 2) + 2 + (QUADSIZE * 2)))
 #define	MAX_PATH_LENGTH	128
 
@@ -188,10 +193,20 @@ struct	DICTNODE			// Offset	32Val	64Val
 		cLockMethod [INTSIZE],	// 0x35	0x55	0x0008	Same
 		cRFU4 [QUADSIZE],	// 0x37	0x57	0x00...	Same
 		cMaxRowLength [INTSIZE],// 0x3b	0x5f	Varies	Same
-		cRFUVarlen [20],	// 0x3d	0x61	0x00...	Same
-		cRFULocalIndex [36];	// 0x51	0x75	0x00...	Same
+		cVarlenG0 [QUADSIZE],	// 0x3d	0x61	Varies	Same
+		cVarlenG1 [QUADSIZE],	// 0x41	0x69	Varies	Same
+		cVarlenG2 [QUADSIZE],	// 0x45	0x71	Varies	Same
+		cVarlenG3 [QUADSIZE],	// 0x49	0x79	Varies	Same
+		cVarlenG4 [QUADSIZE],	// 0x4d	0x81	Varies	Same
+#if	_FILE_OFFSET_BITS == 64
+		cVarlenG5 [QUADSIZE],	//	0x89	Varies	Same
+		cVarlenG6 [QUADSIZE],	//	0x91	Varies	Same
+		cVarlenG7 [QUADSIZE],	//	0x99	Varies	Same
+		cVarlenG8 [QUADSIZE],	//	0xa1	Varies	Same
+#endif	// _FILE_OFFSET_BITS == 64
+		cRFULocalIndex [36];	// 0x51	0xa9	0x00...	Same
 			//		   ---- ----
-			// Length Total	   0x75	0x99
+			// Length Total	   0x75	0xcd
 };
 
 struct	DICTINFO
@@ -203,14 +218,17 @@ struct	DICTINFO
 		iMaxRowLength;	// Maximum data row length
 	int	iDataHandle,	// open () file descriptor of the .dat file
 		iIndexHandle,	// open () file descriptor of the .key file
-		iOpenMode;	// The type of open which was used
+		iOpenMode,	// The type of open which was used
+		iVarlenLength,	// Length of varlen component
+		iVarlenSlot;	// The slot number within tVarlenNode
 	off_t	tDataPosn,	// Used to TRY to prevent an lseek system call
 		tIndexPosn,	//  when sequential blocks are read / written
 		tRowNumber,	// Which data row is "CURRENT" 0 if none
 		tDupNumber,	// Which duplicate number is "CURRENT" (0=First)
 		tRowStart,	// ONLY set to nonzero by isstart()
 		tTransLast,	// Used to see whether to set iIndexChanged
-		tNRows;		// Number of rows (0 IF EMPTY, 1 IF NOT)
+		tNRows,		// Number of rows (0 IF EMPTY, 1 IF NOT)
+		tVarlenNode;	// Node containing 1st varlen data
 	char	cFilename [MAX_PATH_LENGTH],
 		**ppcRowBuffer;	// tMinRowLength buffer for key (re)construction
 	struct	DICTNODE
@@ -343,10 +361,8 @@ off_t	tVBNodeCountGetNext (int);
 off_t	tVBDataCountGetNext (int);
 int	iVBNodeFree (int, off_t);
 int	iVBDataFree (int, off_t);
-//iVBVarlenFree - Future
 off_t	tVBNodeAllocate (int);
 off_t	tVBDataAllocate (int iHandle);
-//tVBVarlenAllocate - Future
 
 // vbKeysIO.c
 int	iVBCheckKey (int, struct keydesc *, int, int, int);
@@ -383,9 +399,10 @@ int	iVBLink (char *, char *);
 int	iVBUnlink (char *);
 int	iVBAccess (char *, int);
 void	vVBBlockDeinit (void);
-void	vVBBlockInvalidate (int iHandle);
-int	iVBBlockRead (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer);
-int	iVBBlockWrite (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer);
+void	vVBBlockInvalidate (int);
+int	iVBBlockRead (int, int, off_t, char *);
+int	iVBBlockWrite (int, int, off_t, char *);
+int	iVBBlockFlush (int);
 
 // vbMemIO.c
 struct	VBLOCK *psVBLockAllocate (int);
@@ -402,3 +419,8 @@ void	vVBUnMalloc (void);
 #ifdef	DEBUG
 void	vVBMallocReport (void);
 #endif	// DEBUG
+
+// vbVarLenIO.c
+int	iVBVarlenRead (int, char *, off_t, int, int);
+int	iVBVarlenWrite (int, char *, int);
+int	iVBVarlenDelete (int, off_t, int, int);

@@ -7,9 +7,12 @@
  * Description:
  *	This module deals with the opening and closing of VBISAM files
  * Version:
- *	$Id: isopen.c,v 1.4 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: isopen.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
  * Modification History:
  *	$Log: isopen.c,v $
+ *	Revision 1.5  2004/01/06 14:31:59  trev_vb
+ *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
+ *	
  *	Revision 1.4  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -293,8 +296,8 @@ isopen (char *pcFilename, int iMode)
 	psFile->iDataHandle = iVBOpen (cNode0, O_RDWR, 0);
 	if (psFile->iDataHandle < 0)
 		goto OPEN_ERR;
-	psVBFile [iHandle]->tDataPosn = -1;
-	psVBFile [iHandle]->tIndexPosn = -1;
+	psVBFile [iHandle]->tDataPosn = 0;
+	psVBFile [iHandle]->tIndexPosn = 0;
 
 	psFile->iNodeSize = MAX_NODE_LENGTH;
 	iResult = iVBEnter (iHandle, TRUE);	// Reads in dictionary node
@@ -339,10 +342,16 @@ isopen (char *pcFilename, int iMode)
 		iVBRowBufferLength = psFile->iMinRowLength + 1 + INTSIZE + QUADSIZE;
 		pcRowBuffer = (char *) pvVBMalloc (iVBRowBufferLength);
 		if (!pcRowBuffer)
-			goto OPEN_ERR;		// BUG This is MORE serious
+		{
+			fprintf (stderr, "FATAL Memory allocation failure!\n");
+			exit (-1);
+		}
 		pcWriteBuffer = (char *) pvVBMalloc (iVBRowBufferLength);
 		if (!pcWriteBuffer)
-			goto OPEN_ERR;		// BUG This is MORE serious
+		{
+			fprintf (stderr, "FATAL Memory allocation failure!\n");
+			exit (-1);
+		}
 	}
 	psFile->ppcRowBuffer = &pcRowBuffer;
 	tNodeNumber = ldquad (psVBFile [iHandle]->sDictNode.cNodeKeydesc);

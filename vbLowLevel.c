@@ -12,9 +12,12 @@
  *	In addition, it also performs the node-buffering in order to lower the
  *	quantity of lseek and read system calls required.
  * Version:
- *	$Id: vbLowLevel.c,v 1.3 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: vbLowLevel.c,v 1.4 2004/01/06 14:31:59 trev_vb Exp $
  * Modification History:
  *	$Log: vbLowLevel.c,v $
+ *	Revision 1.4  2004/01/06 14:31:59  trev_vb
+ *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
+ *	
  *	Revision 1.3  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -35,7 +38,10 @@ struct	VBBLOCK
 	struct	VBBLOCK
 		*psNext,
 		*psPrev;
-	int	iFileHandle;
+	int	iFileHandle,
+		iHandle,
+		iIsDirty,
+		iIsIndex;
 	off_t	tBlockNumber;
 	char	cBuffer [MAX_NODE_LENGTH];
 };
@@ -60,6 +66,7 @@ void	vVBBlockDeinit (void);
 void	vVBBlockInvalidate (int iHandle);
 int	iVBBlockRead (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer);
 int	iVBBlockWrite (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer);
+int	iVBBlockFlush (int iHandle);
 static	void	vBlockInit (void);
 
 /*
@@ -424,6 +431,35 @@ iVBBlockRead (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
 
 	if (!iInitialized)
 		vBlockInit ();
+	/*
+	 * We *CANNOT* rely on buffering index node #1 since it *IS* the node
+	 * that we *MUST* read in to determine whether the buffers are dirty.
+	 * An obvious exception to this is when the table is opened in
+	 * ISEXCLLOCK mode.
+	 */
+	if (iIsIndex && tBlockNumber == 1 && !(psVBFile [iHandle]->iOpenMode & ISEXCLLOCK))
+	{
+		if (psVBFile [iHandle]->tIndexPosn != 0)
+		{
+			tResult = tVBLseek (psVBFile [iHandle]->iIndexHandle, 0, SEEK_SET);
+			if (tResult != 0)
+			{
+				iserrno = errno;
+				psVBFile [iHandle]->tIndexPosn = -1;
+				return (-1);
+			}
+		}
+
+		tLength = tVBRead (psVBFile [iHandle]->iIndexHandle, (void *) cBuffer, (size_t) psVBFile [iHandle]->iNodeSize);
+		if (tLength != (ssize_t) psVBFile [iHandle]->iNodeSize)
+		{
+			iserrno = EBADFILE;
+			psVBFile [iHandle]->tIndexPosn = -1;
+			return (-1);
+		}
+		psVBFile [iHandle]->tIndexPosn = (off_t) psVBFile [iHandle]->iNodeSize;
+		return (0);
+	}
 	if (iIsIndex)
 		iFileHandle = psVBFile [iHandle]->iIndexHandle;
 	else
@@ -433,40 +469,35 @@ iVBBlockRead (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
 	for (psBlock = psBlockHead; psBlock; psBlock = psBlock->psNext)
 		if (psBlock->iFileHandle == iFileHandle && psBlock->tBlockNumber == tBlockNumber)
 			break;
-	/*
-	 * We *CANNOT* rely on buffering index node #1 since it *IS* the node
-	 * that we *MUST* read in to determine whether the buffers are dirty.
-	 * An obvious exception to this is ISEXCLLOCK mode.
-	 */
-	if (iIsIndex && tBlockNumber == 1 && !(psVBFile [iHandle]->iOpenMode & ISEXCLLOCK))
+	if (psBlock)
 	{
-		if (!psBlock)
-			psBlock = psBlockTail;
-	}
-	else
-	{
-		if (psBlock)
-		{
-			memcpy (cBuffer, psBlock->cBuffer, psVBFile [iHandle]->iNodeSize);
-			psBlock->iFileHandle = iFileHandle;
-			psBlock->tBlockNumber = tBlockNumber;
-			// Already at head of list?
-			if (!psBlock->psPrev)
-				return (0);
-			// Remove psBlock from the list
-			psBlock->psPrev->psNext = psBlock->psNext;
-			if (psBlock->psNext)
-				psBlock->psNext->psPrev = psBlock->psPrev;
-			else
-				psBlockTail = psBlock->psPrev;
-			// Re-insert it at the head
-			psBlock->psPrev = VBBLOCK_NULL;
-			psBlock->psNext = psBlockHead;
-			psBlockHead->psPrev = psBlock;
-			psBlockHead = psBlock;
+		memcpy (cBuffer, psBlock->cBuffer, psVBFile [iHandle]->iNodeSize);
+		psBlock->iFileHandle = iFileHandle;
+		psBlock->iHandle = iHandle;
+		psBlock->iIsIndex = iIsIndex;
+		psBlock->tBlockNumber = tBlockNumber;
+		// Already at head of list?
+		if (!psBlock->psPrev)
 			return (0);
-		}
-		psBlock = psBlockTail;
+		// Remove psBlock from the list
+		psBlock->psPrev->psNext = psBlock->psNext;
+		if (psBlock->psNext)
+			psBlock->psNext->psPrev = psBlock->psPrev;
+		else
+			psBlockTail = psBlock->psPrev;
+		// Re-insert it at the head
+		psBlock->psPrev = VBBLOCK_NULL;
+		psBlock->psNext = psBlockHead;
+		psBlockHead->psPrev = psBlock;
+		psBlockHead = psBlock;
+		return (0);
+	}
+	psBlock = psBlockTail;
+	if (psBlock->iIsDirty)
+	{
+		iserrno = iVBBlockFlush (-1);	// Flush them ALL to disk
+		if (iserrno)
+			return (-1);
 	}
 	tOffset = (tBlockNumber - 1) * psVBFile [iHandle]->iNodeSize;
 	if (iIsIndex)
@@ -494,6 +525,8 @@ iVBBlockRead (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
 				psVBFile [iHandle]->tDataPosn = tOffset + psVBFile [iHandle]->iNodeSize;
 			memcpy (cBuffer, psBlock->cBuffer, psVBFile [iHandle]->iNodeSize);
 			psBlock->iFileHandle = iFileHandle;
+			psBlock->iHandle = iHandle;
+			psBlock->iIsIndex = iIsIndex;
 			psBlock->tBlockNumber = tBlockNumber;
 			// Already at head of list?
 			if (!psBlock->psPrev)
@@ -557,9 +590,107 @@ iVBBlockRead (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
  * Problems:
  *	NONE known
  */
-
 int
 iVBBlockWrite (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
+{
+	int	iFileHandle = 0;
+	struct	VBBLOCK
+		*psBlock;
+
+	if (!iInitialized)
+		vBlockInit ();
+	/*
+	 * We *CANNOT* rely on buffering index node #1 since it *IS* the node
+	 * that we *MUST* read in to determine whether the buffers are dirty.
+	 * An obvious exception to this is when the table is opened in
+	 * ISEXCLLOCK mode.
+	 */
+	if (iIsIndex && tBlockNumber == 1 && !(psVBFile [iHandle]->iOpenMode & ISEXCLLOCK))
+	{
+		if (psVBFile [iHandle]->tIndexPosn != 0)
+		{
+			if (tVBLseek (psVBFile [iHandle]->iIndexHandle, 0, SEEK_SET) != 0)
+			{
+				iserrno = errno;
+				psVBFile [iHandle]->tIndexPosn = -1;
+				return (-1);
+			}
+		}
+
+		if (tVBWrite (psVBFile [iHandle]->iIndexHandle, (void *) cBuffer, (size_t) psVBFile [iHandle]->iNodeSize) != (ssize_t) psVBFile [iHandle]->iNodeSize)
+		{
+			iserrno = EBADFILE;
+			psVBFile [iHandle]->tIndexPosn = -1;
+			return (-1);
+		}
+		psVBFile [iHandle]->tIndexPosn = (off_t) psVBFile [iHandle]->iNodeSize;
+		return (0);
+	}
+	if (psVBFile [iHandle]->sFlags.iIndexChanged == 1)
+	{
+		if (iVBBlockFlush (iHandle))
+			return (-1);
+		vVBBlockInvalidate (iHandle);
+	}
+	for (psBlock = psBlockHead; psBlock; psBlock = psBlock->psNext)
+		if (psBlock->iHandle == iHandle && psBlock->iIsIndex == iIsIndex && psBlock->tBlockNumber == tBlockNumber)
+			break;
+	if (!psBlock)
+		psBlock = psBlockTail;
+	// If we're about to reuse a *DIFFERENT* block that's dirty, FLUSH all
+	if (psBlock->iIsDirty && (psBlock->iHandle != iHandle || psBlock->iFileHandle != iFileHandle || psBlock->tBlockNumber != tBlockNumber))
+	{
+		iserrno = iVBBlockFlush (-1);	// Flush them ALL to disk
+		if (iserrno)
+			return (-1);
+	}
+	if (iIsIndex)
+		psBlock->iFileHandle = psVBFile [psBlock->iHandle]->iIndexHandle;
+	else
+		psBlock->iFileHandle = psVBFile [psBlock->iHandle]->iDataHandle;
+	psBlock->iHandle = iHandle;
+	psBlock->iIsDirty = TRUE;
+	psBlock->iIsIndex = iIsIndex;
+	psBlock->tBlockNumber = tBlockNumber;
+	memcpy (psBlock->cBuffer, cBuffer, psVBFile [iHandle]->iNodeSize);
+	// Already at head of list?
+	if (!psBlock->psPrev)
+		return (0);
+	// Remove psBlock from the list
+	psBlock->psPrev->psNext = psBlock->psNext;
+	if (psBlock->psNext)
+		psBlock->psNext->psPrev = psBlock->psPrev;
+	else
+		psBlockTail = psBlock->psPrev;
+	// Re-insert it at the head
+	psBlock->psPrev = VBBLOCK_NULL;
+	psBlock->psNext = psBlockHead;
+	psBlockHead->psPrev = psBlock;
+	psBlockHead = psBlock;
+	return (0);
+}
+
+/*
+ * Name:
+ *	int	iVBBlockFlush (int iHandle);
+ * Arguments:
+ *	int	iHandle
+ *		-1
+ *			Flush *EVERY* handle
+ *		Other
+ *			The VBISAM handle to be flushed
+ * Prerequisites:
+ *	NONE
+ * Returns:
+ *	NONE
+ * Problems:
+ *	NONE known
+ * Comments:
+ *	This routine flushes out the nominated dirty blocks to disk
+ *	If iHandle == -1 the table to which they are associated is ignored
+ */
+int
+iVBBlockFlush (int iHandle)
 {
 	int	iFileHandle;
 	struct	VBBLOCK
@@ -568,85 +699,44 @@ iVBBlockWrite (int iHandle, int iIsIndex, off_t tBlockNumber, char *cBuffer)
 	off_t	tOffset,
 		tResult;
 
-	if (!iInitialized)
-		vBlockInit ();
-	if (iIsIndex)
-		iFileHandle = psVBFile [iHandle]->iIndexHandle;
-	else
-		iFileHandle = psVBFile [iHandle]->iDataHandle;
-	if (psVBFile [iHandle]->sFlags.iIndexChanged == 1)
-		vVBBlockInvalidate (iHandle);
 	for (psBlock = psBlockHead; psBlock; psBlock = psBlock->psNext)
-		if (psBlock->iFileHandle == iFileHandle && psBlock->tBlockNumber == tBlockNumber)
-			break;
-	if (!psBlock)
-		psBlock = psBlockTail;
-	tOffset = (tBlockNumber - 1) * psVBFile [iHandle]->iNodeSize;
-	if (iIsIndex)
 	{
-		if (psVBFile [iHandle]->tIndexPosn == tOffset)
-			tResult = tOffset;
-		else
-			tResult = tVBLseek (iFileHandle, tOffset, SEEK_SET);
-	}
-	else
-	{
-		if (psVBFile [iHandle]->tDataPosn == tOffset)
-			tResult = tOffset;
-		else
-			tResult = tVBLseek (iFileHandle, tOffset, SEEK_SET);
-	}
-	if (tResult == tOffset)
-	{
-		memcpy (psBlock->cBuffer, cBuffer, psVBFile [iHandle]->iNodeSize);
-		tLength = tVBWrite (iFileHandle, (void *) psBlock->cBuffer, (size_t) psVBFile [iHandle]->iNodeSize);
-		if (tLength == (ssize_t) psVBFile [iHandle]->iNodeSize)
+		if (!psBlock->iIsDirty)
+			continue;
+		if (iHandle != -1 && iHandle != psBlock->iHandle)
+			continue;
+		iFileHandle = psBlock->iFileHandle;
+		tOffset = (psBlock->tBlockNumber - 1) * psVBFile [psBlock->iHandle]->iNodeSize;
+		if (psBlock->iIsIndex)
 		{
-			if (iIsIndex)
-				psVBFile [iHandle]->tIndexPosn = tOffset + psVBFile [iHandle]->iNodeSize;
+			if (psVBFile [psBlock->iHandle]->tIndexPosn == tOffset)
+				tResult = tOffset;
 			else
-				psVBFile [iHandle]->tDataPosn = tOffset + psVBFile [iHandle]->iNodeSize;
-			psBlock->iFileHandle = iFileHandle;
-			psBlock->tBlockNumber = tBlockNumber;
-			// Already at head of list?
-			if (!psBlock->psPrev)
-				return (0);
-			// Remove psBlock from the list
-			psBlock->psPrev->psNext = psBlock->psNext;
-			if (psBlock->psNext)
-				psBlock->psNext->psPrev = psBlock->psPrev;
+				tResult = tVBLseek (iFileHandle, tOffset, SEEK_SET);
+		}
+		else
+		{
+			if (psVBFile [psBlock->iHandle]->tDataPosn == tOffset)
+				tResult = tOffset;
 			else
-				psBlockTail = psBlock->psPrev;
-			// Re-insert it at the head
-			psBlock->psPrev = VBBLOCK_NULL;
-			psBlock->psNext = psBlockHead;
-			psBlockHead->psPrev = psBlock;
-			psBlockHead = psBlock;
-			return (0);
+				tResult = tVBLseek (iFileHandle, tOffset, SEEK_SET);
+		}
+		if (tResult == tOffset)
+		{
+			tLength = tVBWrite (iFileHandle, (void *) psBlock->cBuffer, (size_t) psVBFile [psBlock->iHandle]->iNodeSize);
+			if (tLength == (ssize_t) psVBFile [psBlock->iHandle]->iNodeSize)
+			{
+				if (psBlock->iIsIndex)
+					psVBFile [psBlock->iHandle]->tIndexPosn = tOffset + psVBFile [psBlock->iHandle]->iNodeSize;
+				else
+					psVBFile [psBlock->iHandle]->tDataPosn = tOffset + psVBFile [psBlock->iHandle]->iNodeSize;
+				psBlock->iIsDirty = FALSE;
+			}
 		}
 	}
-	// Oops, an error occured...
-	iserrno = errno;
-	if (iIsIndex)
-		psVBFile [iHandle]->tIndexPosn = -1;
-	else
-		psVBFile [iHandle]->tDataPosn = -1;
-	// Already at tail?
-	if (!psBlock->psNext)
-		return (-1);
-	// Move the invalidated block to tail
-	if (psBlock->psPrev)
-		psBlock->psPrev->psNext = psBlock->psPrev;
-	else
-		psBlockHead = psBlock->psPrev;
-	psBlock->psNext->psPrev = psBlock->psPrev;
-	psBlockTail->psNext = psBlock;
-	psBlock->psPrev = psBlockTail;
-	psBlock->psNext = VBBLOCK_NULL;
-	psBlockTail = psBlock;
-	
-	return (-1);
+	return (0);
 }
+
 
 /*
  * Name:
@@ -687,6 +777,7 @@ vBlockInit (void)
 				psBlockHead = psBlock;
 			psBlock->psPrev = psBlockLast;
 			psBlock->iFileHandle = -1;
+			psBlock->iIsDirty = FALSE;
 			psBlockLast = psBlock;
 		}
 		else

@@ -9,9 +9,12 @@
  *	table.  It also implements the isaddindex () and isdelindex () as these
  *	are predominantly only called at isbuild () time.
  * Version:
- *	$Id: isbuild.c,v 1.4 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: isbuild.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
  * Modification History:
  *	$Log: isbuild.c,v $
+ *	Revision 1.5  2004/01/06 14:31:59  trev_vb
+ *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
+ *	
  *	Revision 1.4  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -136,8 +139,8 @@ isbuild (char *pcFilename, int iMaxRowLength, struct keydesc *psKey, int iMode)
 	psVBFile [iHandle]->iDataHandle = iVBOpen (cNode0, iFlags | O_CREAT, 0666);
 	if (psVBFile [iHandle]->iDataHandle < 0)
 		goto BUILD_ERR;
-	psVBFile [iHandle]->tIndexPosn = -1;
-	psVBFile [iHandle]->tDataPosn = -1;
+	psVBFile [iHandle]->tIndexPosn = 0;
+	psVBFile [iHandle]->tDataPosn = 0;
 	psVBFile [iHandle]->iNKeys = 1;
 	psVBFile [iHandle]->iNodeSize = MAX_NODE_LENGTH;
 	psVBFile [iHandle]->iOpenMode = iMode;
@@ -227,6 +230,7 @@ isbuild (char *pcFilename, int iMaxRowLength, struct keydesc *psKey, int iMode)
 		iVBBlockWrite (iHandle, TRUE, (off_t) 3, cNode0);
 	}
 
+	iVBBlockFlush (iHandle);
 	isclose (iHandle);
 	iserrno = 0;
 	iVBTransBuild (pcFilename, iMinRowLength, iMaxRowLength, psKey);

@@ -8,9 +8,12 @@
  *	This module handles ALL the low level index file I/O operations for the
  *	VBISAM library.
  * Version:
- *	$Id: vbIndexIO.c,v 1.4 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: vbIndexIO.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
  * Modification History:
  *	$Log: vbIndexIO.c,v $
+ *	Revision 1.5  2004/01/06 14:31:59  trev_vb
+ *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
+ *	
  *	Revision 1.4  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -47,10 +50,8 @@ off_t	tVBNodeCountGetNext (int);
 off_t	tVBDataCountGetNext (int);
 int	iVBNodeFree (int, off_t);
 int	iVBDataFree (int, off_t);
-//iVBVarlenFree - Future
 off_t	tVBNodeAllocate (int);
 off_t	tVBDataAllocate (int iHandle);
-//tVBVarlenAllocate - Future
 
 /*
  * Name:
@@ -298,7 +299,6 @@ tVBDataCountGetNext (int iHandle)
  *	ENOTOPEN
  *	EBADFILE
  *	EBADARG
- *	BUG - OTHER?
  * Problems:
  *	NONE known
  * Comments:
@@ -396,7 +396,6 @@ iVBNodeFree (int iHandle, off_t tNodeNumber)
  *	ENOTOPEN?
  *	EBADFILE?
  *	EBADARG?
- *	BUG - OTHER?
  * Problems:
  *	NONE known
  */
@@ -459,7 +458,6 @@ iVBDataFree (int iHandle, off_t tRowNumber)
 	psVBFile [iHandle]->sFlags.iIsDictLocked = 2;
 	return (0);
 }
-//iVBVarlenFree - Future
 
 /*
  * Name:
@@ -542,7 +540,6 @@ tVBNodeAllocate (int iHandle)
  *	ENOTOPEN?
  *	EBADFILE?
  *	EBADARG?
- *	BUG - OTHER?
  * Problems:
  *	NONE known
  */
@@ -616,4 +613,3 @@ tVBDataAllocate (int iHandle)
 	tValue = tVBDataCountGetNext (iHandle);
 	return (tValue);
 }
-//iVBVarlenAllocate - Future

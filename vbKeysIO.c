@@ -7,9 +7,12 @@
  * Description:
  *	This module handles ALL the key manipulation for the VBISAM library.
  * Version:
- *	$Id: vbKeysIO.c,v 1.6 2004/01/05 07:36:17 trev_vb Exp $
+ *	$Id: vbKeysIO.c,v 1.7 2004/01/06 14:31:59 trev_vb Exp $
  * Modification History:
  *	$Log: vbKeysIO.c,v $
+ *	Revision 1.7  2004/01/06 14:31:59  trev_vb
+ *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
+ *	
  *	Revision 1.6  2004/01/05 07:36:17  trev_vb
  *	TvB 05Feb2002 Added licensing et al as Johann v. N. noted I'd overlooked it
  *	
@@ -648,7 +651,7 @@ iVBKeyLocateRow (int iHandle, int iKeyNumber, off_t tRowNumber)
 				iResult = FALSE;
 			psTree = psTree->psParent;
 		}
-		if (iResult)	// Technically, if iResult == FALSE it's a BUG!
+		if (iResult)
 			return (0);
 	}
 
@@ -990,7 +993,6 @@ iVBDelNodes (int iHandle, int iKeyNumber, off_t tRootNode)
 				pcSrcPtr += INTSIZE;
 				iKeyLength -= (iCompLength - 2);
 #else	// _FILE_OFFSET_BITS == 64
-//PROBABLY A BUG HERE!
 				iCompLength = *(pcSrcPtr);
 				pcSrcPtr++;
 				iKeyLength -= (iCompLength - 1);
