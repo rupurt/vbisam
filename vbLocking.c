@@ -8,9 +8,15 @@
  *	This module handles the locking on both the index and data files for the
  *	VBISAM library.
  * Version:
- *	$Id: vbLocking.c,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: vbLocking.c,v 1.8 2004/06/13 07:52:17 trev_vb Exp $
  * Modification History:
  *	$Log: vbLocking.c,v $
+ *	Revision 1.8  2004/06/13 07:52:17  trev_vb
+ *	TvB 13June2004
+ *	Implemented sharing of open files.
+ *	Changed the locking strategy slightly to allow table-level locking granularity
+ *	(i.e. A process opening the same table more than once can now lock itself!)
+ *	
  *	Revision 1.7  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -431,13 +437,13 @@ iVBDataLock (int iHandle, int iMode, off_t tRowNumber, int iIsTransaction)
 	 */
 	if (tRowNumber == 0)
 	{
-		while (psVBFile [iHandle]->psLockHead)
+		while (sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead)
 		{
-			psLock = psVBFile [iHandle]->psLockHead->psNext;
-			vVBLockFree (psVBFile [iHandle]->psLockHead);
-			psVBFile [iHandle]->psLockHead = psLock;
+			psLock = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead->psNext;
+			vVBLockFree (sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead);
+			sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead = psLock;
 		}
-		psVBFile [iHandle]->psLockTail = psVBFile [iHandle]->psLockHead;
+		sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead;
 		memset (cVBNode [0], 0xff, QUADSIZE);
 		cVBNode [0] [0] = 0x3f;
 		tLength = ldquad (cVBNode [0]);
@@ -450,17 +456,22 @@ iVBDataLock (int iHandle, int iMode, off_t tRowNumber, int iIsTransaction)
 	 * A one byte row lock can be merged with previous / next row locks
 	 * in the kernel in order to save on consuming valuable system locks
 	 */
-	memset (cVBNode [0], 0x00, QUADSIZE);
-	cVBNode [0] [0] = 0x40;
-	tOffset = ldquad (cVBNode [0]);
-	iResult = iVBLock (psVBFile [iHandle]->iIndexHandle, tOffset + tRowNumber, tLength, iMode);
-	if (iResult != 0)
-		return (ELOCKED);
+	if (iMode == VBUNLOCK && tRowNumber)
+		iResult = iVBLockDelete (iHandle, tRowNumber, iIsTransaction);
+	else
+		iResult = 0;
+	if (!iResult)
+	{
+		memset (cVBNode [0], 0x00, QUADSIZE);
+		cVBNode [0] [0] = 0x40;
+		tOffset = ldquad (cVBNode [0]);
+		iResult = iVBLock (psVBFile [iHandle]->iIndexHandle, tOffset + tRowNumber, tLength, iMode);
+		if (iResult != 0)
+			return (ELOCKED);
+	}
 	if (iMode != VBUNLOCK && tRowNumber)
 		return (iVBLockInsert (iHandle, tRowNumber, iIsTransaction));
-	if (iMode == VBUNLOCK && tRowNumber)
-		return (iVBLockDelete (iHandle, tRowNumber, iIsTransaction));
-	return (0);
+	return (iResult);
 }
 
 /*
@@ -489,31 +500,33 @@ iVBLockInsert (int iHandle, off_t tRowNumber, int iIsTransaction)
 		*psNewLock = VBLOCK_NULL,
 		*psLock;
 
-	psLock = psVBFile [iHandle]->psLockHead;
+	psLock = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead;
 	// Insertion at head of list
 	if (psLock == VBLOCK_NULL || iIsTransaction < psLock->iIsTransaction || tRowNumber < psLock->tRowNumber)
 	{
 		psNewLock = psVBLockAllocate (iHandle);
 		if (psNewLock == VBLOCK_NULL)
 			return (errno);
+		psNewLock->iHandle = iHandle;
 		psNewLock->iIsTransaction = iIsTransaction;
 		psNewLock->tRowNumber = tRowNumber;
 		psNewLock->psNext = psLock;
-		psVBFile [iHandle]->psLockHead = psNewLock;
-		if (psVBFile [iHandle]->psLockTail == VBLOCK_NULL)
-			psVBFile [iHandle]->psLockTail = psNewLock;
+		sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead = psNewLock;
+		if (sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail == VBLOCK_NULL)
+			sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail = psNewLock;
 		return (0);
 	}
 	// Insertion at tail of list
-	if (iIsTransaction >= psVBFile [iHandle]->psLockTail->iIsTransaction && tRowNumber > psVBFile [iHandle]->psLockTail->tRowNumber)
+	if (iIsTransaction >= sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail->iIsTransaction && tRowNumber > sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail->tRowNumber)
 	{
 		psNewLock = psVBLockAllocate (iHandle);
 		if (psNewLock == VBLOCK_NULL)
 			return (errno);
+		psNewLock->iHandle = iHandle;
 		psNewLock->iIsTransaction = iIsTransaction;
 		psNewLock->tRowNumber = tRowNumber;
-		psVBFile [iHandle]->psLockTail->psNext = psNewLock;
-		psVBFile [iHandle]->psLockTail = psNewLock;
+		sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail->psNext = psNewLock;
+		sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail = psNewLock;
 		return (0);
 	}
 	// Position psLock to insertion point (Keep in mind, we insert AFTER)
@@ -522,13 +535,17 @@ iVBLockInsert (int iHandle, off_t tRowNumber, int iIsTransaction)
 		// Are we promoting a non-transactional lock to transactional?
 		if (tRowNumber == psLock->psNext->tRowNumber)
 		{
+#ifdef	CISAMLOCKS
+			if (psLock->iHandle != iHandle)
+				return (ELOCKED);	// Table granular lock!
+#endif	// CISAMLOCKS
 			// Is it already 'correct'?
 			if (iIsTransaction == psLock->psNext->iIsTransaction)
 				return (0);	// Already OK!
 			else
 			{
 				// Are we promoting the tail?
-				if (psLock->psNext == psVBFile [iHandle]->psLockTail)
+				if (psLock->psNext == sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail)
 				{
 					psLock->psNext->iIsTransaction = iIsTransaction;
 					return (0);
@@ -540,11 +557,26 @@ iVBLockInsert (int iHandle, off_t tRowNumber, int iIsTransaction)
 		psLock = psLock->psNext;
 	}
 	if (psLock->iIsTransaction == iIsTransaction && psLock->tRowNumber == tRowNumber)
+	{
+#ifdef	CISAMLOCKS
 		return (0);
+#else	// CISAMLOCKS
+		if (psLock->iHandle == iHandle)
+			return (0);
+		else
+			return (ELOCKED);
+#endif	// CISAMLOCKS
+	}
 	if (!psNewLock)
 		psNewLock = psVBLockAllocate (iHandle);
+#ifndef	CISAMLOCKS
+	else
+		if (psNewLock->iHandle != iHandle)
+			return (ELOCKED);
+#endif	// CISAMLOCKS
 	if (psNewLock == VBLOCK_NULL)
 		return (errno);
+	psLock->iHandle = iHandle;
 	psNewLock->iIsTransaction = iIsTransaction;
 	psNewLock->tRowNumber = tRowNumber;
 	// Insert psNewLock AFTER psLock
@@ -577,19 +609,23 @@ iVBLockDelete (int iHandle, off_t tRowNumber, int iIsTransaction)
 {
 	struct	VBLOCK
 		*psLockToDelete,
-		*psLock = psVBFile [iHandle]->psLockHead;
+		*psLock = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead;
 
 	// Sanity check #1
 	if (!psLock || psLock->tRowNumber > tRowNumber)
 		return (EBADARG);
 	// Check if deleting first entry in list
+#ifndef	CISAMLOCKS
+	if (psLock->tRowNumber == tRowNumber && psLock->iHandle != iHandle)
+		return (ELOCKED);
+#endif	// CISAMLOCKS
 	if (psLock->tRowNumber == tRowNumber)
 	{
-		if (psVBFile [iHandle]->psLockHead->iIsTransaction && !iIsTransaction)
+		if (sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead->iIsTransaction && !iIsTransaction)
 			return (ENOTRANS);
-		psVBFile [iHandle]->psLockHead = psLock->psNext;
-		if (!psVBFile [iHandle]->psLockHead)
-			psVBFile [iHandle]->psLockTail = VBLOCK_NULL;
+		sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead = psLock->psNext;
+		if (!sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead)
+			sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail = VBLOCK_NULL;
 		vVBLockFree (psLock);
 		return (0);
 	}
@@ -603,8 +639,12 @@ iVBLockDelete (int iHandle, off_t tRowNumber, int iIsTransaction)
 		return (ENOTRANS);
 	psLockToDelete = psLock->psNext;
 	psLock->psNext = psLockToDelete->psNext;
-	if (psLockToDelete == psVBFile [iHandle]->psLockTail)
-			psVBFile [iHandle]->psLockTail = psLock;
+	if (psLockToDelete == sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail)
+			sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail = psLock;
+#ifndef	CISAMLOCKS
+	if (psLock->tRowNumber == tRowNumber && psLock->iHandle != iHandle)
+		return (ELOCKED);
+#endif	// CISAMLOCKS
 	vVBLockFree (psLockToDelete);
 
 	return (0);

@@ -8,9 +8,15 @@
  *	This is the header that defines the internally used structures for the
  *	VBISAM library.
  * Version:
- *	$Id: isinternal.h,v 1.10 2004/06/13 06:32:33 trev_vb Exp $
+ *	$Id: isinternal.h,v 1.11 2004/06/13 07:52:17 trev_vb Exp $
  * Modification History:
  *	$Log: isinternal.h,v $
+ *	Revision 1.11  2004/06/13 07:52:17  trev_vb
+ *	TvB 13June2004
+ *	Implemented sharing of open files.
+ *	Changed the locking strategy slightly to allow table-level locking granularity
+ *	(i.e. A process opening the same table more than once can now lock itself!)
+ *	
  *	Revision 1.10  2004/06/13 06:32:33  trev_vb
  *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
  *	
@@ -162,7 +168,8 @@ struct	VBLOCK
 {
 	struct	VBLOCK
 		*psNext;
-	int	iIsTransaction;	// If TRUE, it's a transaction modification lock
+	int	iHandle,	// The handle that 'applied' this lock
+		iIsTransaction;	// If TRUE, it's a transaction modification lock
 	off_t	tRowNumber;
 };
 #define	VBLOCK_NULL	((struct VBLOCK *) 0)
@@ -293,9 +300,6 @@ struct	DICTINFO
 	struct	VBKEY
 		*psKeyFree [MAXSUBS], // An array of linked lists of free VBKEYs
 		*psKeyCurr [MAXSUBS]; // An array of 'current' VBKEY pointers
-	struct	VBLOCK		// Ordered linked list of locked row numbers
-		*psLockHead,
-		*psLockTail;
 	struct
 	{	
 	unsigned int
@@ -322,6 +326,20 @@ struct	DICTINFO
 EXTERN	struct	DICTINFO
 	*psVBFile [VB_MAX_FILES + 1];
 // If the corresponding handle is not open, psVBFile [iHandle] == NULL
+
+struct	VBFILE
+{
+	int	iHandle,
+		iRefCount;	// How many times we are 'open'
+	dev_t	tDevice;
+	ino_t	tInode;
+	off_t	tPosn;
+	struct	VBLOCK		// Ordered linked list of locked row numbers
+		*psLockHead,
+		*psLockTail;
+};
+EXTERN	struct	VBFILE
+	sVBFile [VB_MAX_FILES * 3];	// Enough? Hehe
 
 #define	VBL_BUILD	("BU")
 #define	VBL_BEGIN	("BW")

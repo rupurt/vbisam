@@ -10,9 +10,15 @@
  *	within this module, it becomes easier to 'virtualize' the filesystem
  *	at a later date.
  * Version:
- *	$Id: vbLowLevel.c,v 1.8 2004/06/13 06:32:33 trev_vb Exp $
+ *	$Id: vbLowLevel.c,v 1.9 2004/06/13 07:52:17 trev_vb Exp $
  * Modification History:
  *	$Log: vbLowLevel.c,v $
+ *	Revision 1.9  2004/06/13 07:52:17  trev_vb
+ *	TvB 13June2004
+ *	Implemented sharing of open files.
+ *	Changed the locking strategy slightly to allow table-level locking granularity
+ *	(i.e. A process opening the same table more than once can now lock itself!)
+ *	
  *	Revision 1.8  2004/06/13 06:32:33  trev_vb
  *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
  *	
@@ -41,14 +47,6 @@
  */
 #include	"isinternal.h"
 
-static	struct
-{
-	int	iHandle,
-		iRefCount;	// How many times we are 'open'
-	dev_t	tDevice;
-	ino_t	tInode;
-	off_t	tPosn;
-} sVBFile [VB_MAX_FILES * 3];	// Enough? Hehe
 static	int	iInitialized = FALSE;
 
 /*

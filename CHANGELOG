@@ -110,9 +110,15 @@ vbLowLevel.c isbuild.c isopen.c isinternal.h:
 	implicitly releases *ALL* locks on the handle that were 'owned' by the
 	process.  Changes made to insert a level of indirection on:
 		Open, Close, Lseek, Read, Write, Lock
+isinternal.h isHelper.c isopen.c vbLocking.c:
+	Moved the locks from psVBFile to sVBFile and implemented table-granular
+	locking.  Note that if CISAMLOCKS is defined when compiling VBISAM, the
+	locking strategy tries to more closely mirror that of C-ISAM.  However,
+	this introduces BUGS just like in C-ISAM!  I advise against using the
+	CISAMLOCKS and would PREFER you fixed the buggy code you have!
 Known Issues
 ------------
-Uncertain:
+Uncertain (but MOSTLY in vbKeysIO.c):
 	Two-phase commit (2PC) still needs to be done
 vbLowLevel.c:
 	I believe that incoming signals are still an issue on at least the
@@ -130,7 +136,7 @@ vbMemIO.c:
 	an overall limit of Y bytes for the process as a whole.
 Documentation:
 	Heck, I need to write a whole freaking BOOK!!!
-	Reminder to include the environment variables in the docs
+	Reminder to self to include the environment variables in the docs
 ================================================================================
 06Jun2004 1.02-beta (D-Day!)
 ============================

@@ -9,9 +9,15 @@
  *	Only functions with external linkage (i.e. is*, ld* and st*) should be
  *	defined within this module.
  * Version:
- *	$Id: isHelper.c,v 1.10 2004/06/13 06:32:33 trev_vb Exp $
+ *	$Id: isHelper.c,v 1.11 2004/06/13 07:52:17 trev_vb Exp $
  * Modification History:
  *	$Log: isHelper.c,v $
+ *	Revision 1.11  2004/06/13 07:52:17  trev_vb
+ *	TvB 13June2004
+ *	Implemented sharing of open files.
+ *	Changed the locking strategy slightly to allow table-level locking granularity
+ *	(i.e. A process opening the same table more than once can now lock itself!)
+ *	
  *	Revision 1.10  2004/06/13 06:32:33  trev_vb
  *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
  *	
@@ -215,19 +221,25 @@ isrelcurr (int iHandle)
 		iserrno = ENOREC;
 		return (-1);
 	}
-	psLock = psVBFile [iHandle]->psLockHead;
+	psLock = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead;
 	while (psLock)
 	{
 		psLockNext = psLock->psNext;
 		if (psLock->iIsTransaction)
 			return (0);
+		if (psLock->tRowNumber > psVBFile [iHandle]->tRowNumber)
+			return (0);
 		if (psLock->tRowNumber != psVBFile [iHandle]->tRowNumber)
 			continue;
+#ifdef	CISAMLOCKS
+		if (iHandle != psLock->iHandle)
+			return (0);
+#endif	//CISAMLOCKS
 // Note: this implicitly relies on the following to reset the psLockHead / Tail
 		iserrno = iVBDataLock (iHandle, VBUNLOCK, psLock->tRowNumber, FALSE);
 		if (iserrno)
 			return (-1);
-		psLock = psLockNext;
+		return (0);
 	}
 	return (0);
 }
@@ -254,21 +266,31 @@ isrelease (int iHandle)
 		*psLock,
 		*psLockNext;
 
-	if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen > 1)
+	if (!psVBFile [iHandle] || psVBFile [iHandle]->iIsOpen)
 	{
 		iserrno = ENOTOPEN;
 		return (-1);
 	}
-	psLock = psVBFile [iHandle]->psLockHead;
+	psLock = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead;
 	while (psLock)
 	{
 		psLockNext = psLock->psNext;
 		if (psLock->iIsTransaction)
 			return (0);
+#ifndef	CISAMLOCKS
+		if (iHandle == psLock->iHandle)
+		{
+// Note: this implicitly relies on the following to reset the psLockHead / Tail
+			iserrno = iVBDataLock (iHandle, VBUNLOCK, psLock->tRowNumber, FALSE);
+			if (iserrno)
+				return (-1);
+		}
+#else	// CISAMLOCKS
 // Note: this implicitly relies on the following to reset the psLockHead / Tail
 		iserrno = iVBDataLock (iHandle, VBUNLOCK, psLock->tRowNumber, FALSE);
 		if (iserrno)
 			return (-1);
+#endif	//CISAMLOCKS
 		psLock = psLockNext;
 	}
 	return (0);
@@ -303,19 +325,25 @@ isrelrec (int iHandle, off_t tRowNumber)
 		iserrno = ENOTOPEN;
 		return (-1);
 	}
-	psLock = psVBFile [iHandle]->psLockHead;
+	psLock = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead;
 	while (psLock)
 	{
 		psLockNext = psLock->psNext;
 		if (psLock->iIsTransaction)
 			return (0);
-		if (psLock->tRowNumber != tRowNumber)
+		if (psLock->tRowNumber > psVBFile [iHandle]->tRowNumber)
+			return (0);
+		if (psLock->tRowNumber != psVBFile [iHandle]->tRowNumber)
 			continue;
+#ifdef	CISAMLOCKS
+		if (iHandle != psLock->iHandle)
+			return (0);
+#endif	//CISAMLOCKS
 // Note: this implicitly relies on the following to reset the psLockHead / Tail
 		iserrno = iVBDataLock (iHandle, VBUNLOCK, psLock->tRowNumber, FALSE);
 		if (iserrno)
 			return (-1);
-		psLock = psLockNext;
+		return (0);
 	}
 	return (0);
 }

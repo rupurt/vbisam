@@ -5,9 +5,15 @@
 # Description:
 #	This is the main makefile that BUILDS all this stuff (I hope)
 # Version:
-#	$Id: Makefile,v 1.10 2004/06/13 06:32:33 trev_vb Exp $
+#	$Id: Makefile,v 1.11 2004/06/13 07:52:17 trev_vb Exp $
 # Modification History:
 #	$Log: Makefile,v $
+#	Revision 1.11  2004/06/13 07:52:17  trev_vb
+#	TvB 13June2004
+#	Implemented sharing of open files.
+#	Changed the locking strategy slightly to allow table-level locking granularity
+#	(i.e. A process opening the same table more than once can now lock itself!)
+#	
 #	Revision 1.10  2004/06/13 06:32:33  trev_vb
 #	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
 #	
@@ -53,9 +59,11 @@ SLB	= /usr/lib/lib$(LIB).so
 # -pg:		Generate gprof-able code
 # -D_FILE_OFFSET_BITS=64:
 #		Needed to break the 2GB barrier on many 32-bit CPU systems
-# -DISAMMODE=1	Files use 64-bit node and row numbers and thus don't work with
+# -DISAMMODE=1	Files use 64-bit node and row numbers and thus can't work with
 #		any C-ISAM linked programs
 # -DISAMMODE=0	Files are (supposedly) 100% C-ISAM compatible
+# -DCISAMLOCKS	If this is set, then the improved table granular locks revert
+#		to the old process wide locks
 # ****************************************************************************
 CC	= gcc
 CFLAGS	= -fPIC -Wall -pg -g -D_FILE_OFFSET_BITS=64 -DDEBUG -DISAMMODE=1

@@ -7,9 +7,15 @@
  * Description:
  *	This module deals with the opening and closing of VBISAM files
  * Version:
- *	$Id: isopen.c,v 1.9 2004/06/13 06:32:33 trev_vb Exp $
+ *	$Id: isopen.c,v 1.10 2004/06/13 07:52:17 trev_vb Exp $
  * Modification History:
  *	$Log: isopen.c,v $
+ *	Revision 1.10  2004/06/13 07:52:17  trev_vb
+ *	TvB 13June2004
+ *	Implemented sharing of open files.
+ *	Changed the locking strategy slightly to allow table-level locking granularity
+ *	(i.e. A process opening the same table more than once can now lock itself!)
+ *	
  *	Revision 1.9  2004/06/13 06:32:33  trev_vb
  *	TvB 12June2004 See CHANGELOG 1.03 (Too lazy to enumerate)
  *	
@@ -162,6 +168,7 @@ iVBClose2 (int iHandle)
 	struct	VBLOCK
 		*psRowLock;
 
+	psVBFile [iHandle]->iIsOpen = 0;	// It's a LIE, but so what!
 	isrelease (iHandle);
 	iserrno = iVBTransClose (iHandle, psVBFile [iHandle]->cFilename);
 	if (iVBClose (psVBFile [iHandle]->iDataHandle))
@@ -170,16 +177,16 @@ iVBClose2 (int iHandle)
 	if (iVBClose (psVBFile [iHandle]->iIndexHandle))
 		iserrno = errno;
 	psVBFile [iHandle]->iIndexHandle = -1;
-	psVBFile [iHandle]->iIsOpen = 2;
 	psVBFile [iHandle]->tRowNumber = -1;
 	psVBFile [iHandle]->tDupNumber = -1;
-	while (psVBFile [iHandle]->psLockHead)
+	psVBFile [iHandle]->iIsOpen = 2;	// Only buffers remain!
+	while (sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead)
 	{
-		psRowLock = psVBFile [iHandle]->psLockHead->psNext;
-		vVBLockFree (psVBFile [iHandle]->psLockHead);
-		psVBFile [iHandle]->psLockHead = psRowLock;
+		psRowLock = sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead->psNext;
+		vVBLockFree (sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead);
+		sVBFile [psVBFile [iHandle]->iIndexHandle].psLockHead = psRowLock;
 	}
-	psVBFile [iHandle]->psLockTail = psVBFile [iHandle]->psLockHead;
+	sVBFile [psVBFile [iHandle]->iIndexHandle].psLockTail = VBLOCK_NULL;
 	psVBFile [iHandle]->sFlags.iTransYet = 0;
 	for (iLoop = 0; iLoop < MAXSUBS; iLoop++)
 		psVBFile [iHandle]->psKeyCurr [iLoop] = VBKEY_NULL;
