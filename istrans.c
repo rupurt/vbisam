@@ -8,9 +8,15 @@
  *	This is the module that deals with all the transaction processing for
  *	a file in the VBISAM library.
  * Version:
- *	$Id: istrans.c,v 1.8 2004/06/16 10:53:56 trev_vb Exp $
+ *	$Id: istrans.c,v 1.9 2004/06/22 09:49:54 trev_vb Exp $
  * Modification History:
  *	$Log: istrans.c,v $
+ *	Revision 1.9  2004/06/22 09:49:54  trev_vb
+ *	22June2004 TvB Saved open mode in build log entry
+ *	22June2004 TvB Highlighted the varlen flag (although not implemented yet)
+ *	22June2004 TvB Changed locking of log file as it was too late
+ *	22June2004 TvB Changed dictionary locked flag to FORCE a save on exit
+ *	
  *	Revision 1.8  2004/06/16 10:53:56  trev_vb
  *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
  *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
@@ -307,7 +313,7 @@ iVBTransBuild (char *pcFilename, int iMinRowLen, int iMaxRowLen, struct keydesc 
 			return (-1);
 	vTransHdr (VBL_BUILD);
 	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR);
-	stint (0x0806, pcBuffer);
+	stint (iMode, pcBuffer);
 	stint (iMinRowLen, pcBuffer + INTSIZE);
 	stint (iMaxRowLen, pcBuffer + (2 * INTSIZE));
 	stint (psKeydesc->iFlags, pcBuffer + (3 * INTSIZE));
@@ -575,7 +581,7 @@ iVBTransClose (int iHandle, char *pcFilename)
 	iLength = strlen (pcFilename) + 1;
 	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR);
 	stint (iHandle, pcBuffer);
-	stint (0, pcBuffer + INTSIZE);
+	stint (0, pcBuffer + INTSIZE);		// VARLEN flag!
 	memcpy (pcBuffer + INTSIZE + INTSIZE, pcFilename, iLength);
 	iLength += (INTSIZE * 2);
 	iserrno = iWriteTrans (iLength, FALSE);
@@ -619,7 +625,7 @@ iVBTransOpen (int iHandle, char *pcFilename)
 	iLength = strlen (pcFilename) + 1;
 	pcBuffer = cVBTransBuffer + sizeof (struct SLOGHDR);
 	stint (iHandle, pcBuffer);
-	stint (0, pcBuffer + INTSIZE);
+	stint (0, pcBuffer + INTSIZE);		// VARLEN flag!
 	memcpy (pcBuffer + INTSIZE + INTSIZE, pcFilename, iLength);
 	iLength += (INTSIZE * 2);
 	iserrno = iWriteTrans (iLength, FALSE);
@@ -934,6 +940,9 @@ static	off_t	tOffset = 0;
 	iTransLength += sizeof (struct SLOGHDR) + INTSIZE;
 	stint (iTransLength, cVBTransBuffer);
 	stint (iTransLength, cVBTransBuffer + iTransLength - INTSIZE);
+	iResult = iVBLock (iVBLogfileHandle, 0, 0, VBWRLCKW);
+	if (iResult)
+		return (ELOGWRIT);
 	if (iRollback)
 	{
 		psVBLogHeader = (struct SLOGHDR *) cVBTransBuffer;
@@ -952,9 +961,6 @@ static	off_t	tOffset = 0;
 		if (tVBLseek (iVBLogfileHandle, 0, SEEK_END) == -1)
 			return (ELOGWRIT);
 	}
-	iResult = iVBLock (iVBLogfileHandle, 0, 0, VBWRLCKW);
-	if (iResult)
-		return (ELOGWRIT);
 	if (tVBWrite (iVBLogfileHandle, (void *) cVBTransBuffer, (size_t) iTransLength) != (ssize_t) iTransLength)
 		return (ELOGWRIT);
 	iResult = iVBLock (iVBLogfileHandle, 0, 0, VBUNLOCK);
@@ -1274,7 +1280,7 @@ iVBRollMeForward (off_t tOffset, int iPID)
 			if (iLocalHandle [iHandle] == -1)
 				return (EBADFILE);
 			iVBEnter (iLocalHandle [iHandle], TRUE);
-			psVBFile [iLocalHandle [iHandle]]->sFlags.iIsDictLocked |= 0x04;
+			psVBFile [iLocalHandle [iHandle]]->sFlags.iIsDictLocked |= 0x02;
 			if (tRowNumber == ldquad (psVBFile [iLocalHandle [iHandle]]->sDictNode.cDataCount))
 			{
 				psVBFile [iLocalHandle [iHandle]]->sFlags.iIsDictLocked |= 0x02;
