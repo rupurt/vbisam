@@ -7,9 +7,12 @@
  *	This is the header that defines the internally used structures for the
  *	VBISAM library.
  * Version:
- *	$Id: isinternal.h,v 1.2 2003/12/22 04:46:55 trev_vb Exp $
+ *	$Id: isinternal.h,v 1.3 2003/12/23 03:08:56 trev_vb Exp $
  * Modification History:
  *	$Log: isinternal.h,v $
+ *	Revision 1.3  2003/12/23 03:08:56  trev_vb
+ *	TvB 22Dec2003 Minor compilation glitch 'fixes'
+ *	
  *	Revision 1.2  2003/12/22 04:46:55  trev_vb
  *	TvB 21Dec2003 Changes to add iserrio and fix isreclen type
  *	TvB 21Dec2003 Also, modified header to correct case ('Id')
@@ -26,7 +29,8 @@
 #include	<stdlib.h>
 #include	<string.h>
 #include	<errno.h>
-#include	<values.h>
+#include	<limits.h>
+#include	<float.h>
 #define	VBISAM_LIB
 #include	"vbisam.h"
 
@@ -49,7 +53,7 @@
 #else	// DEV
 # if	_FILE_OFFSET_BITS == 64
 #  define	MAX_NODE_LENGTH	4096
-# else	_// FILE_OFFSET_BITS == 64
+# else	// _FILE_OFFSET_BITS == 64
 #  define	MAX_NODE_LENGTH	1024
 # endif	// _FILE_OFFSET_BITS == 64
 #endif	// DEV

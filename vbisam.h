@@ -7,9 +7,12 @@
  *	This is the header that defines all the various structures et al for
  *	the VBISAM library.
  * Version:
- *	$Id: vbisam.h,v 1.2 2003/12/22 04:50:15 trev_vb Exp $
+ *	$Id: vbisam.h,v 1.3 2003/12/23 03:08:56 trev_vb Exp $
  * Modification History:
  *	$Log: vbisam.h,v $
+ *	Revision 1.3  2003/12/23 03:08:56  trev_vb
+ *	TvB 22Dec2003 Minor compilation glitch 'fixes'
+ *	
  *	Revision 1.2  2003/12/22 04:50:15  trev_vb
  *	TvB 21Dec2003 Changes to support iserrio and fix type on isreclen
  *	TvB 21Dec2003 Also, modified header to correct case ('Id')
@@ -26,7 +29,8 @@
 #include	<stdlib.h>
 #include	<string.h>
 #include	<errno.h>
-#include	<values.h>
+#include	<limits.h>
+#include	<float.h>
 
 #ifndef	VBISAM_INCL	// avoid multiple include problems
 #define	VBISAM_INCL

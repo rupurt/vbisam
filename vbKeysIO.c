@@ -6,9 +6,12 @@
  * Description:
  *	This module handles ALL the key manipulation for the VBISAM library.
  * Version:
- *	$Id: vbKeysIO.c,v 1.2 2003/12/22 04:48:44 trev_vb Exp $
+ *	$Id: vbKeysIO.c,v 1.3 2003/12/23 03:08:56 trev_vb Exp $
  * Modification History:
  *	$Log: vbKeysIO.c,v $
+ *	Revision 1.3  2003/12/23 03:08:56  trev_vb
+ *	TvB 22Dec2003 Minor compilation glitch 'fixes'
+ *	
  *	Revision 1.2  2003/12/22 04:48:44  trev_vb
  *	TvB 21Dec2003 Modified header to correct case ('Id')
  *	
@@ -2005,7 +2008,7 @@ vLowValueKeySet (struct keydesc *psKeydesc, char *pcKeyValue)
 			iRemainder = psKeydesc->sPart [iPart].iLength;
 			while (iRemainder > 0)
 			{
-				stint (MINSHORT, pcKeyValue);
+				stint (SHRT_MIN, pcKeyValue);
 				pcKeyValue += INTSIZE;
 				iRemainder -= INTSIZE;
 			}
@@ -2015,7 +2018,7 @@ vLowValueKeySet (struct keydesc *psKeydesc, char *pcKeyValue)
 			iRemainder = psKeydesc->sPart [iPart].iLength;
 			while (iRemainder > 0)
 			{
-				stlong (MINLONG, pcKeyValue);
+				stlong (LONG_MIN, pcKeyValue);
 				pcKeyValue += LONGSIZE;
 				iRemainder -= LONGSIZE;
 			}
@@ -2037,7 +2040,7 @@ vLowValueKeySet (struct keydesc *psKeydesc, char *pcKeyValue)
 			iRemainder = psKeydesc->sPart [iPart].iLength;
 			while (iRemainder > 0)
 			{
-				stfloat (MINFLOAT, pcKeyValue);
+				stfloat (FLT_MIN, pcKeyValue);
 				pcKeyValue += FLOATSIZE;
 				iRemainder -= FLOATSIZE;
 			}
@@ -2047,7 +2050,7 @@ vLowValueKeySet (struct keydesc *psKeydesc, char *pcKeyValue)
 			iRemainder = psKeydesc->sPart [iPart].iLength;
 			while (iRemainder > 0)
 			{
-				stint (MINDOUBLE, pcKeyValue);
+				stint (DBL_MIN, pcKeyValue);
 				pcKeyValue += DOUBLESIZE;
 				iRemainder -= DOUBLESIZE;
 			}
@@ -2096,7 +2099,7 @@ vHighValueKeySet (struct keydesc *psKeydesc, char *pcKeyValue)
 			iRemainder = psKeydesc->sPart [iPart].iLength;
 			while (iRemainder > 0)
 			{
-				stint (MAXSHORT, pcKeyValue);
+				stint (SHRT_MAX, pcKeyValue);
 				pcKeyValue += INTSIZE;
 				iRemainder -= INTSIZE;
 			}
@@ -2106,7 +2109,7 @@ vHighValueKeySet (struct keydesc *psKeydesc, char *pcKeyValue)
 			iRemainder = psKeydesc->sPart [iPart].iLength;
 			while (iRemainder > 0)
 			{
-				stlong (MAXLONG, pcKeyValue);
+				stlong (LONG_MAX, pcKeyValue);
 				pcKeyValue += LONGSIZE;
 				iRemainder -= LONGSIZE;
 			}
@@ -2128,7 +2131,7 @@ vHighValueKeySet (struct keydesc *psKeydesc, char *pcKeyValue)
 			iRemainder = psKeydesc->sPart [iPart].iLength;
 			while (iRemainder > 0)
 			{
-				stfloat (MAXFLOAT, pcKeyValue);
+				stfloat (FLT_MAX, pcKeyValue);
 				pcKeyValue += FLOATSIZE;
 				iRemainder -= FLOATSIZE;
 			}
@@ -2138,7 +2141,7 @@ vHighValueKeySet (struct keydesc *psKeydesc, char *pcKeyValue)
 			iRemainder = psKeydesc->sPart [iPart].iLength;
 			while (iRemainder > 0)
 			{
-				stdbl (MAXDOUBLE, pcKeyValue);
+				stdbl (DBL_MAX, pcKeyValue);
 				pcKeyValue += DOUBLESIZE;
 				iRemainder -= DOUBLESIZE;
 			}
