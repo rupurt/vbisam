@@ -7,9 +7,12 @@
  * Description:
  *	This module tests a bunch of the features of VBISAM
  * Version:
- *	$Id: MVTest.c,v 1.4 2004/06/16 10:53:55 trev_vb Exp $
+ *	$Id: MVTest.c,v 1.5 2004/06/22 09:36:36 trev_vb Exp $
  * Modification History:
  *	$Log: MVTest.c,v $
+ *	Revision 1.5  2004/06/22 09:36:36  trev_vb
+ *	22June2004 TvB Added some 'nicer' output counters and stuff
+ *	
  *	Revision 1.4  2004/06/16 10:53:55  trev_vb
  *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
  *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
@@ -34,9 +37,17 @@
 #include	"isinternal.h"
 
 int	iVBRdCount = 0,
+	iVBRdCommit = 0,
+	iVBRdTotal = 0,
 	iVBWrCount = 0,
+	iVBWrCommit = 0,
+	iVBWrTotal = 0,
 	iVBDlCount = 0,
-	iVBUpCount = 0;
+	iVBDlCommit = 0,
+	iVBDlTotal = 0,
+	iVBUpCount = 0,
+	iVBUpCommit = 0,
+	iVBUpTotal = 0;
 int
 main (int iArgc, char **ppcArgv)
 {
@@ -72,27 +83,28 @@ main (int iArgc, char **ppcArgv)
 		iHandle = isbuild (cFileName, 255, &sKeydesc, ISINOUT+ISFIXLEN+ISEXCLLOCK);
 		if (iHandle < 0)
 		{
-			fprintf (stdout, "Error creating database: %d\n", iserrno);
+			printf ("Error creating database: %d\n", iserrno);
 			exit (-1);
 		}
 		sKeydesc.k_flags |= ISDUPS;
 		//for (sKeydesc.k_start = 1; sKeydesc.k_start < MAXSUBS; sKeydesc.k_start++)
 		for (sKeydesc.k_start = 1; sKeydesc.k_start < 2; sKeydesc.k_start++)
 			if (isaddindex (iHandle, &sKeydesc))
-				printf ("Error adding index %d\n", sKeydesc.k_start);
+				printf ("Error %d adding index %d\n", iserrno, sKeydesc.k_start);
 		isclose (iHandle);
+		sprintf (cLogfileName, "RECOVER");
+		sprintf (cCommand, "rm -f %s; touch %s", cLogfileName, cLogfileName);
+		system (cCommand);
 		return (0);
 	}
 	// The following is sort of cheating as it *assumes* we're running *nix
 	// However, I have to admit to liking the fact that this will FAIL when
 	// using WynDoze (TvB)
 	sprintf (cLogfileName, "RECOVER");
-	sprintf (cCommand, "rm -f %s; touch %s", cLogfileName, cLogfileName);
-	system (cCommand);
 	iResult = islogopen (cLogfileName);
 	if (iResult < 0)
 	{
-		fprintf (stdout, "Error opening log: %d\n", iserrno);
+		printf ("Error opening log: %d\n", iserrno);
 		exit (-1);
 	}
 
@@ -102,16 +114,20 @@ main (int iArgc, char **ppcArgv)
 		if (!(iLoop % 100))
 			printf ("iLoop=%d\n", iLoop);
 
+		iVBDlCount = 0;
+		iVBRdCount = 0;
+		iVBUpCount = 0;
+		iVBWrCount = 0;
 		iResult = isbegin ();
 		if (iResult < 0)
 		{
-			fprintf (stdout, "Error begin transaction: %d\n", iserrno);
+			printf ("Error begin transaction: %d\n", iserrno);
 			exit (-1);
 		}
 		iHandle = isopen (cFileName, ISINOUT+ISFIXLEN+ISTRANS+ISAUTOLOCK);
 		if (iHandle < 0)
 		{
-			fprintf (stdout, "Error opening database: %d\n", iserrno);
+			printf ("Error opening database: %d\n", iserrno);
 			exit (-1);
 		}
 
@@ -127,7 +143,7 @@ main (int iArgc, char **ppcArgv)
 				{
 					if (iserrno != EDUPL && iserrno != ELOCKED)
 					{
-						fprintf (stdout, "Error writing: %d\n", iserrno);
+						printf ("Error writing: %d\n", iserrno);
 						goto err;
 					}
 				}
@@ -139,10 +155,10 @@ main (int iArgc, char **ppcArgv)
 				if ((iResult = isread (iHandle, (char *)cRecord, ISEQUAL)) != 0)
 				{
 					if (iserrno == ELOCKED)
-						; //fprintf (stdout, "Locked during deletion\n");
+						; //printf ("Locked during deletion\n");
 					else if (iserrno != ENOREC)
 					{
-						fprintf (stdout, "Error reading: %d\n", iserrno);
+						printf ("Error reading: %d\n", iserrno);
 						goto err;
 					}
 				}
@@ -156,10 +172,10 @@ main (int iArgc, char **ppcArgv)
 				if ((iResult = isrewrite (iHandle, (char *)cRecord)) != 0)
 				{
 					if (iserrno == ELOCKED)
-						; //fprintf (stdout, "Locked during rewrite\n");
+						; //printf ("Locked during rewrite\n");
 					else if (iserrno != ENOREC)
 					{
-						fprintf (stdout, "Error rewriting: %d\n", iserrno);
+						printf ("Error rewriting: %d\n", iserrno);
 						goto err;
 					}
 				}
@@ -171,10 +187,10 @@ main (int iArgc, char **ppcArgv)
 				if ((iResult = isdelete (iHandle, (char *)cRecord)) != 0)
 				{
 					if (iserrno == ELOCKED)
-						; //fprintf (stdout, "Locked during deletion\n");
+						; //printf ("Locked during deletion\n");
 					else if (iserrno != ENOREC)
 					{
-						fprintf (stdout, "Error deleting: %d\n", iserrno);
+						printf ("Error deleting: %d\n", iserrno);
 						goto err;
 					}
 				}
@@ -187,23 +203,31 @@ main (int iArgc, char **ppcArgv)
 		iResult = isflush (iHandle);
 		if (iResult < 0)
 		{
-			fprintf (stdout, "Error flush: %d\n", iserrno);
+			printf ("Error flush: %d\n", iserrno);
 			exit (-1);
 		}
 		iResult = isclose (iHandle);
 		if (iResult < 0)
 		{
-			fprintf (stdout, "Error closing database: %d\n", iserrno);
+			printf ("Error closing database: %d\n", iserrno);
 			exit (-1);
 		}
 
+		iVBDlTotal += iVBDlCount;
+		iVBRdTotal += iVBRdCount;
+		iVBUpTotal += iVBUpCount;
+		iVBWrTotal += iVBWrCount;
 		switch (rand () % 2)
 		{
 		case	0:
+			iVBDlCommit += iVBDlCount;
+			iVBRdCommit += iVBRdCount;
+			iVBUpCommit += iVBUpCount;
+			iVBWrCommit += iVBWrCount;
 			iResult = iscommit ();
 			if (iResult < 0)
 			{
-				fprintf (stdout, "Error commit: %d\n", iserrno);
+				printf ("Error commit: %d\n", iserrno);
 				exit (-1);
 			}
 			break;
@@ -212,17 +236,28 @@ main (int iArgc, char **ppcArgv)
 			iResult = isrollback ();
 			if (iResult < 0)
 			{
-				fprintf (stdout, "Error rollback: %d\n", iserrno);
-				exit (-1);
+				if (iserrno == EDUPL || iserrno == ENOREC)
+					printf ("Same BUG (%d) as in C-ISAM!\n", iserrno);
+				else
+				{
+					printf ("Error rollback: %d\n", iserrno);
+					exit (-1);
+				}
 			}
 			break;
 		}
 	}
 err:
-	printf ("Note:\n\tThe following figures include those that were rolled back!\n\tTherefore, you cannot sum them to match the file content!\n");
-	printf ("Write  Count: %d\n", iVBWrCount);
-	printf ("Read   Count: %d\n", iVBRdCount);
-	printf ("Delete Count: %d\n", iVBDlCount);
-	printf ("Update Count: %d\n", iVBUpCount);
+	printf ("                 Total Commited\n");
+	printf ("              -------- --------\n");
+	printf ("Delete Count: %8d %8d\n", iVBDlTotal, iVBDlCommit);
+	printf ("Read   Count: %8d %8d\n", iVBRdTotal, iVBRdCommit);
+	printf ("Update Count: %8d %8d\n", iVBUpTotal, iVBUpCommit);
+	printf ("Write  Count: %8d %8d\n", iVBWrTotal, iVBWrCommit);
+	printf ("              -------- --------\n");
+	printf ("OPS OVERALL : %8d %8d\n", (iVBDlTotal + iVBRdTotal + iVBUpTotal + iVBWrTotal), (iVBDlCommit + iVBRdCommit + iVBUpCommit + iVBWrCommit));
+	printf ("                       ========\n");
+	printf ("ROWS ADDED THIS RUN:   %8d\n", (iVBWrCommit - iVBDlCommit));
+	printf ("                       ========\n");
 	return (iResult);
 }
