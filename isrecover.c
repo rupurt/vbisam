@@ -8,9 +8,13 @@
  *	This is the module that deals solely with the isrecover function in the
  *	VBISAM library.
  * Version:
- *	$Id: isrecover.c,v 1.2 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: isrecover.c,v 1.3 2004/06/22 09:44:41 trev_vb Exp $
  * Modification History:
  *	$Log: isrecover.c,v $
+ *	Revision 1.3  2004/06/22 09:44:41  trev_vb
+ *	22June2004 TvB Full rewrite.  Currently works as per C-ISAM.  I'll extend it
+ *	22June2004 TvB to include far greater functionality!
+ *	
  *	Revision 1.2  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -26,25 +30,56 @@
 /*
  * Prototypes
  */
-static	void	vDelayedDataFree (int, int, off_t);
-static	void	vFreeDelayed (int);
+int	isrecover (void);
+static	int	iRollBackAll (void);
+static	void	vCloseAll (void);
+static	int	iGetRcvHandle (int, int);
+static	struct	RCV_HDL	*psRcvAllocate (void);
+static	void	vRcvFree (struct RCV_HDL *);
+static	int	iRcvCheckTrans (int, int);
+static	int	iIgnore (int);
+static	int	iRcvBuild (char *);
+static	int	iRcvBegin (char *, int);
+static	int	iRcvCreateIndex (char *);
+static	int	iRcvCluster (char *);
+static	int	iRcvCommit (char *);
+static	int	iRcvDelete (char *);
+static	int	iRcvDeleteIndex (char *);
+static	int	iRcvFileErase (char *);
+static	int	iRcvFileClose (char *);
+static	int	iRcvFileOpen (char *);
+static	int	iRcvFileRename (char *);
+static	int	iRcvInsert (char *);
+static	int	iRcvRollBack (void);
+static	int	iRcvSetUnique (char *);
+static	int	iRcvUniqueID (char *);
+static	int	iRcvUpdate (char *);
 
-struct	VBDELAY
+struct	RCV_HDL
 {
-	struct	VBDELAY
-		*psNext;
-	int	iHandle;
-	off_t	tRowNumber;
+	struct	RCV_HDL
+		*psNext,
+		*psPrev;
+	int	iPID,
+		iHandle,
+		iTransLock;
 };
-#define	VBDELAY_NULL	((struct VBDELAY *) 0)
+#define	RH_NULL	((struct RCV_HDL *) 0)
+static	struct	RCV_HDL
+	*psRecoverHandle [VB_MAX_FILES + 1];
 
-	struct
-	{
-		off_t	tOffset;
-		int	iPID;
-		struct	VBDELAY
-			*psDelayHead;
-	} sOpenTrans [MAX_OPEN_TRANS];
+struct	STRANS
+{
+	struct	STRANS
+		*psNext,
+		*psPrev;
+	int	iPID,
+		iIgnoreMe;	// If TRUE, isrecover will NOT process this one
+};
+#define	STRANS_NULL	((struct STRANS *) 0)
+static	struct	STRANS
+	*psTransHead = STRANS_NULL;
+static	char	cLclBuffer [65536];
 
 /*
  * Name:
@@ -63,41 +98,31 @@ struct	VBDELAY
  *	transactions at any given point in time.  If this limit is exceeded,
  *	isrecover will FAIL with iserrno = EBADMEM
  */
-int	isrecover (void)
+int
+isrecover (void)
 {
-	char	*pcBuffer,
-		*pcRow;
-	int	iFreeNow,
-		iHandle,
-		iLoop,
-		iLocalHandle [VB_MAX_FILES + 1];
+	char	*pcBuffer;
+	int	iLoop,
+		iSaveError;
 	off_t	tLength,
 		tLength2,
-		tLength3,
-		tOffset,
-		tRBOffset,
-		tRowNumber;
+		tOffset;
 
-	// Initialize by stating that *ALL* transactions are 'closed'.
-	for (iLoop = 0; iLoop < MAX_OPEN_TRANS; iLoop++)
-		sOpenTrans [iLoop].tOffset = -1;
+	// Initialize by stating that *ALL* tables must be closed!
 	for (iLoop = 0; iLoop <= VB_MAX_FILES; iLoop++)
-	{
 		if (psVBFile [iLoop])
-			iLocalHandle [iLoop] = iLoop;
-		else
-			iLocalHandle [iLoop] = -1;
-	}
+			return (ETOOMANY);
 	iVBInTrans = VBRECOVER;
+	for (iLoop = 0; iLoop <= VB_MAX_FILES; iLoop++)
+		psRecoverHandle [iLoop] = RH_NULL;
 	psVBLogHeader = (struct SLOGHDR *) (cVBTransBuffer - INTSIZE);
-	pcBuffer = cVBTransBuffer - INTSIZE + sizeof (struct SLOGHDR);
 	// Begin by reading the header of the first transaction
 	iserrno = EBADFILE;
 	if (tVBLseek (iVBLogfileHandle, 0, SEEK_SET) != 0)
 		return (-1);
 	if (tVBRead (iVBLogfileHandle, cVBTransBuffer, INTSIZE) != INTSIZE)
 		return (0);	// Nothing to do if the file is empty
-	tOffset = INTSIZE;
+	tOffset = 0;
 	tLength = ldint (cVBTransBuffer);
 	// Now, recurse forwards
 	while (1)
@@ -105,292 +130,604 @@ int	isrecover (void)
 		tLength2 = tVBRead (iVBLogfileHandle, cVBTransBuffer, tLength);
 		iserrno = EBADFILE;
 		if (tLength2 != tLength && tLength2 != tLength - INTSIZE)
-			return (-1);
-		iHandle = ldint (pcBuffer);
-		tRowNumber = ldquad (pcBuffer + INTSIZE);
-		if (!memcmp (psVBLogHeader->cOperation, VBL_BEGIN, 2))
-		{
-			/*
-			 * Handle the weird case where we get a 2nd BW for the
-			 * SAME PID before we encounter the CW/RW of the 1st
-			 */
-			for (iLoop = 0; iLoop < MAX_OPEN_TRANS; iLoop++)
-				if (sOpenTrans [iLoop].tOffset != -1 && ldint (psVBLogHeader->cPID) == sOpenTrans [iLoop].iPID)
-				{
-					vFreeDelayed (iLoop);
-					iserrno = iVBRollMeBack (sOpenTrans [iLoop].tOffset, sOpenTrans [iLoop].iPID, TRUE);
-					sOpenTrans [iLoop].tOffset = -1;
-					if (iserrno)
-						return (-1);	// Bug RestoreState
-				}
-			for (iLoop = 0; iLoop < MAX_OPEN_TRANS; iLoop++)
-			{
-				if (sOpenTrans [iLoop].tOffset == -1)
-				{
-					sOpenTrans [iLoop].tOffset = tOffset + tLength2 - INTSIZE;
-					sOpenTrans [iLoop].iPID = ldint (psVBLogHeader->cPID);
-					sOpenTrans [iLoop].psDelayHead = VBDELAY_NULL;
-					break;
-				}
-			}
-		}
-		else if (!memcmp (psVBLogHeader->cOperation, VBL_COMMIT, 2))
-		{
-			for (iLoop = 0; iLoop < MAX_OPEN_TRANS; iLoop++)
-				if (sOpenTrans [iLoop].tOffset != -1 && ldint (psVBLogHeader->cPID) == sOpenTrans [iLoop].iPID)
-				{
-					vFreeDelayed (iLoop);
-					sOpenTrans [iLoop].tOffset = -1;
-				}
-		}
-		else if (!memcmp (psVBLogHeader->cOperation, VBL_ROLLBACK, 2))
-		{
-			tLength3 = ldint (cVBTransBuffer + tLength - INTSIZE);
-			tRBOffset = tVBLseek (iVBLogfileHandle, 0, SEEK_CUR);
-			for (iLoop = 0; iLoop < MAX_OPEN_TRANS; iLoop++)
-				if (sOpenTrans [iLoop].tOffset != -1 && ldint (psVBLogHeader->cPID) == sOpenTrans [iLoop].iPID)
-				{
-					vFreeDelayed (iLoop);
-					iserrno = iVBRollMeBack (sOpenTrans [iLoop].tOffset, sOpenTrans [iLoop].iPID, TRUE);
-					sOpenTrans [iLoop].tOffset = -1;
-					if (iserrno)
-						return (-1);	// Bug RestoreState
-				}
-			tVBLseek (iVBLogfileHandle, tRBOffset, SEEK_SET);
-			tOffset += tLength2;
-			if (tLength2 == tLength - INTSIZE)
-				break;
-			tLength = tLength3;
-			psVBLogHeader = (struct SLOGHDR *) (cVBTransBuffer - INTSIZE);
-			continue;
-		}
-		else
-		{
-			for (iLoop = 0; iLoop < MAX_OPEN_TRANS; iLoop++)
-			{
-				if (sOpenTrans [iLoop].tOffset != -1 && ldint (psVBLogHeader->cPID) == sOpenTrans [iLoop].iPID)
-				{
-					sOpenTrans [iLoop].tOffset = tOffset + tLength2 - INTSIZE;
-					break;
-				}
-			}
-		}
-		if (!memcmp (psVBLogHeader->cOperation, VBL_FILEOPEN, 2))
-		{
-			if (iLocalHandle [iHandle] != -1)
-				return (-1);
-			iLocalHandle [iHandle] = isopen (pcBuffer + INTSIZE + INTSIZE, ISAUTOLOCK+ISINOUT+ISTRANS);
-			if (iLocalHandle [iHandle] == -1)
-				return (-1);	// Probably ETOOMANY!
-		}
-		else if (!memcmp (psVBLogHeader->cOperation, VBL_FILECLOSE, 2))
-		{
-			if (iLocalHandle [iHandle] == -1)
-				return (-1);
-			isclose (iLocalHandle [iHandle]);
-			iLocalHandle [iHandle] = -1;
-		}
-		else if (!memcmp (psVBLogHeader->cOperation, VBL_INSERT, 2))
-		{
-			if (iLocalHandle [iHandle] == -1)
-				return (-1);
-			isreclen = ldint (pcBuffer + INTSIZE + QUADSIZE);
-			pcRow = pcBuffer + INTSIZE + QUADSIZE + INTSIZE;
-			iVBEnter (iLocalHandle [iHandle], TRUE);
-			psVBFile [iLocalHandle [iHandle]]->sFlags.iIsDictLocked |= 0x02;
-			if (iVBForceDataAllocate (iLocalHandle [iHandle], tRowNumber))
-			{
-				iserrno = EBADFILE;
-				return (-1);
-			}
-			if (iVBWriteRow (iLocalHandle [iHandle], pcRow, tRowNumber))
-				return (-1);
-			iVBExit (iLocalHandle [iHandle]);
-		}
-		else if (!memcmp (psVBLogHeader->cOperation, VBL_UPDATE, 2))
-		{
-			if (iLocalHandle [iHandle] == -1)
-				return (-1);
-			isreclen = ldint (pcBuffer + INTSIZE + QUADSIZE);
-			pcRow = pcBuffer + INTSIZE + QUADSIZE + INTSIZE + INTSIZE + isreclen;
-			isreclen = ldint (pcBuffer + INTSIZE + QUADSIZE + INTSIZE);
-			// BUG - Should we READ the row first and compare it?
-			if (isrewrec (iLocalHandle [iHandle], tRowNumber, pcRow))
-				return (-1);
-		}
-		else if (!memcmp (psVBLogHeader->cOperation, VBL_DELETE, 2))
-		{
-			if (iLocalHandle [iHandle] == -1)
-				return (-1);
-			// BUG - Should we READ the row first and compare it?
-			if (isdelrec (iLocalHandle [iHandle], tRowNumber))
-				return (-1);
-
-//If the isdel* was not called within an isbegin, then free the data row NOW
-//Otherwise, delay it till the commit / rollback is processed
-
-			iFreeNow = TRUE;
-			for (iLoop = 0; iLoop < MAX_OPEN_TRANS; iLoop++)
-				if (sOpenTrans [iLoop].tOffset != -1 && ldint (psVBLogHeader->cPID) == sOpenTrans [iLoop].iPID)
-				{
-					vDelayedDataFree (iLoop, iLocalHandle [iHandle], tRowNumber);
-					iFreeNow = FALSE;
-					break;	// exit for loop
-				}
-			if (iFreeNow)
-			{
-				if (iVBEnter (iLocalHandle [iHandle], TRUE))
-					return (-1);
-				if (iVBDataFree (iLocalHandle [iHandle], tRowNumber))
-					return (-1);
-				if (iVBExit (iLocalHandle [iHandle]))
-					return (-1);
-			}
-		}
-		else if (!memcmp (psVBLogHeader->cOperation, VBL_BUILD, 2))
-		{
-fprintf (stderr, "BUG: VBL_BUILD - isrecover is incomplete!\n");
-		}
+			break;
+		pcBuffer = cVBTransBuffer - INTSIZE + sizeof (struct SLOGHDR);
+#ifdef	DEBUG
+		printf ("Offset:%08llx PID:%d Type: %-2.2s Row:%08llx\n", tOffset, ldint (psVBLogHeader->cPID), psVBLogHeader->cOperation, ldquad (pcBuffer + INTSIZE));
+		fflush (stdout);
+#endif	// DEBUG
+		if (!memcmp (psVBLogHeader->cOperation, VBL_BUILD, 2))
+			iserrno = iRcvBuild (pcBuffer);
+		else if (!memcmp (psVBLogHeader->cOperation, VBL_BEGIN, 2))
+			iserrno = iRcvBegin (pcBuffer, ldint (cVBTransBuffer + tLength - INTSIZE));
 		else if (!memcmp (psVBLogHeader->cOperation, VBL_CREINDEX, 2))
-		{
-fprintf (stderr, "BUG: VBL_CREINDEX - isrecover is incomplete!\n");
-		}
-		else if (!memcmp (psVBLogHeader->cOperation, VBL_DELINDEX, 2))
-		{
-fprintf (stderr, "BUG: VBL_DELINDEX - isrecover is incomplete!\n");
-		}
+			iserrno = iRcvCreateIndex (pcBuffer);
 		else if (!memcmp (psVBLogHeader->cOperation, VBL_CLUSTER, 2))
-		{
-fprintf (stderr, "BUG: VBL_CLUSTER - isrecover is incomplete!\n");
-		}
+			iserrno = iRcvCluster (pcBuffer);
+		else if (!memcmp (psVBLogHeader->cOperation, VBL_COMMIT, 2))
+			iserrno = iRcvCommit (pcBuffer);
+		else if (!memcmp (psVBLogHeader->cOperation, VBL_DELETE, 2))
+			iserrno = iRcvDelete (pcBuffer);
+		else if (!memcmp (psVBLogHeader->cOperation, VBL_DELINDEX, 2))
+			iserrno = iRcvDeleteIndex (pcBuffer);
 		else if (!memcmp (psVBLogHeader->cOperation, VBL_FILEERASE, 2))
-		{
-fprintf (stderr, "BUG: VBL_FILEERASE - isrecover is incomplete!\n");
-		}
+			iserrno = iRcvFileErase (pcBuffer);
+		else if (!memcmp (psVBLogHeader->cOperation, VBL_FILECLOSE, 2))
+			iserrno = iRcvFileClose (pcBuffer);
+		else if (!memcmp (psVBLogHeader->cOperation, VBL_FILEOPEN, 2))
+			iserrno = iRcvFileOpen (pcBuffer);
+		else if (!memcmp (psVBLogHeader->cOperation, VBL_INSERT, 2))
+			iserrno = iRcvInsert (pcBuffer);
 		else if (!memcmp (psVBLogHeader->cOperation, VBL_RENAME, 2))
-		{
-fprintf (stderr, "BUG: VBL_RENAME - isrecover is incomplete!\n");
-		}
+			iserrno = iRcvFileRename (pcBuffer);
+		else if (!memcmp (psVBLogHeader->cOperation, VBL_ROLLBACK, 2))
+			iserrno = iRcvRollBack ();
 		else if (!memcmp (psVBLogHeader->cOperation, VBL_SETUNIQUE, 2))
-		{
-fprintf (stderr, "BUG: VBL_SETUNIQUE - isrecover is incomplete!\n");
-		}
+			iserrno = iRcvSetUnique (pcBuffer);
 		else if (!memcmp (psVBLogHeader->cOperation, VBL_UNIQUEID, 2))
-		{
-fprintf (stderr, "BUG: VBL_UNIQUEID - isrecover is incomplete!\n");
-		}
+			iserrno = iRcvUniqueID (pcBuffer);
+		else if (!memcmp (psVBLogHeader->cOperation, VBL_UPDATE, 2))
+			iserrno = iRcvUpdate (pcBuffer);
+		if (iserrno)
+			break;
 		tOffset += tLength2;
 		if (tLength2 == tLength - INTSIZE)
 			break;
 		tLength = ldint (cVBTransBuffer + tLength - INTSIZE);
 	}
-	// Finally, we can rollback any transactions that were never 'closed'
-	for (iLoop = 0; iLoop < MAX_OPEN_TRANS; iLoop++)
-	{
-		if (sOpenTrans [iLoop].tOffset != -1)
-		{
-			vFreeDelayed (iLoop);
-			iserrno = iVBRollMeBack (sOpenTrans [iLoop].tOffset, sOpenTrans [iLoop].iPID, TRUE);
-			if (iserrno)
-				return (-1);	// Bug RestoreState
-		}
-	}
-	// Return the list of open files to what it was before the isrecover
-	for (iLoop = 0; iLoop <= VB_MAX_FILES; iLoop++)
-		if (iLocalHandle [iLoop] == -1 && !psVBFile [iLoop])
-			isclose (iLoop);
-	iserrno = 0;
+	iSaveError = iserrno;
+	// We now rollback any transactions that were never 'closed'
+	iserrno = iRollBackAll ();
+	if (!iSaveError)
+		iSaveError = iserrno;
+	vCloseAll ();
+	iserrno = iSaveError;
+	if (iserrno)
+		return (-1);
 	return (0);
 }
 
-// Add the row number to the list to be passed to iVBDataFree when the
-// commit / rollback is encountered (Or, in the RARE case, EOF on the logfile)
-static	void
-vDelayedDataFree (int iIndex, int iHandle, off_t tRowNumber)
+static	int
+iRollBackAll (void)
 {
-	struct	VBDELAY
-		*psDelay,
-		*psDelayLoop;
-
-	psDelay = (struct VBDELAY *) pvVBMalloc (sizeof (struct VBDELAY));
-	if (psDelay == VBDELAY_NULL)	// Should NEVER happen but...
-	{				// At least we TRIED
-		iVBEnter (iHandle, TRUE);
-		iVBDataFree (iHandle, tRowNumber);
-		iVBExit (iHandle);
-		return;
-	}
-	psDelay->iHandle = iHandle;
-	psDelay->tRowNumber = tRowNumber;
-	// Insert at head?
-	if (sOpenTrans [iIndex].psDelayHead == VBDELAY_NULL || iHandle < sOpenTrans [iIndex].psDelayHead->iHandle || (iHandle == sOpenTrans [iIndex].psDelayHead->iHandle && tRowNumber < sOpenTrans [iIndex].psDelayHead->tRowNumber))
+	while (psTransHead)
 	{
-		psDelay->psNext = sOpenTrans [iIndex].psDelayHead;
-		sOpenTrans [iIndex].psDelayHead = psDelay;
-		return;
+		stint (psTransHead->iPID, psVBLogHeader->cPID);
+		iRcvRollBack ();
 	}
-	// Insert in middle?
-	for (psDelayLoop = sOpenTrans [iIndex].psDelayHead; psDelayLoop->psNext;psDelayLoop = psDelayLoop->psNext)
-	{
-		if (psDelayLoop->psNext->iHandle < iHandle)
-			continue;
-		if (psDelayLoop->psNext->iHandle == iHandle && psDelayLoop->psNext->tRowNumber < tRowNumber)
-			continue;
-		psDelay->psNext = psDelayLoop->psNext;
-		psDelayLoop->psNext = psDelay;
-		return;
-	}
-	// Insert at tail!
-	psDelay->psNext = VBDELAY_NULL;
-	psDelayLoop->psNext = psDelay;
+	return (0);
 }
 
 static	void
-vFreeDelayed (int iIndex)
+vCloseAll (void)
 {
-	int	iLastHandle = -1,
-		iLastWasClosed = FALSE,
-		iLoop;
-	struct	VBDELAY
-		*psDelay;
+	int	iLoop;
 
-	for (psDelay = sOpenTrans [iIndex].psDelayHead; psDelay; psDelay = psDelay->psNext)
+	for (iLoop = 0; iLoop <= VB_MAX_FILES; iLoop++)
+		if (psVBFile [iLoop] && psVBFile [iLoop]->iIsOpen == 0)
+			isclose (iLoop);
+}
+
+/*
+ * Name:
+ *	static	int	iGetRcvHandle (int iHandle, int iPID);
+ * Arguments:
+ *	int	iHandle
+ *		The handle as extracted from the transaction
+ *	int	iPID
+ *		The PID as extracted from the transaction
+ * Prerequisites:
+ *	NONE
+ * Returns:
+ *	-1	Failure
+ *	Other	The *live* handle to use in place of the transaction handle
+ * Problems:
+ *	NONE known
+ * Comments:
+ *	This function is to translate the handle from a transaction into one
+ *	that can be used within the isrecover process to perform the action
+ *	as defined within the transaction.
+ */
+static	int
+iGetRcvHandle (int iHandle, int iPID)
+{
+	struct	RCV_HDL
+		*psRcvHdl = psRecoverHandle [iHandle];
+
+	while (psRcvHdl && psRcvHdl->iPID != iPID)
+		psRcvHdl = psRcvHdl->psNext;
+	if (psRcvHdl && psRcvHdl->iPID == iPID)
+		return (psRcvHdl->iHandle);
+	return (-1);
+}
+
+static	struct	RCV_HDL
+*psRcvAllocate (void)
+{
+	return ((struct RCV_HDL *) pvVBMalloc (sizeof (struct RCV_HDL)));
+}
+
+static	void
+vRcvFree (struct RCV_HDL *psRcv)
+{
+	vVBFree (psRcv, sizeof (struct RCV_HDL));
+}
+
+static	int
+iRcvCheckTrans (int iLength, int iPID)
+{
+	int	iFound = FALSE,
+		iResult = FALSE;
+	off_t	tLength = iLength,
+		tLength2,
+		tRcvSaveOffset = tVBLseek (iVBLogfileHandle, 0, SEEK_CUR);
+
+	psVBLogHeader = (struct SLOGHDR *) (cLclBuffer - INTSIZE);
+	while (!iFound)
 	{
-		if (iLastHandle != psDelay->iHandle)
+		tLength2 = tVBRead (iVBLogfileHandle, cLclBuffer, (size_t) tLength);
+		if (tLength2 != tLength && tLength2 != tLength - INTSIZE)
+			break;
+		if (ldint (psVBLogHeader->cPID) == iPID)
 		{
-			if (iLastHandle != -1)
+			if (!memcmp (psVBLogHeader->cOperation, VBL_COMMIT, 2))
+				iFound = TRUE;
+			else if (!memcmp (psVBLogHeader->cOperation, VBL_BEGIN, 2))
 			{
-				iVBExit (iLastHandle);
-				if (iLastWasClosed)
-					psVBFile [iLastHandle]->iIsOpen = 1;
+				iFound = TRUE;
+				if (iVBRecvMode & RECOV_VB)
+					iResult = TRUE;
 			}
-			if (psVBFile [psDelay->iHandle]->iIsOpen == 1)
+			else if (!memcmp (psVBLogHeader->cOperation, VBL_ROLLBACK, 2))
 			{
-				psVBFile [psDelay->iHandle]->iIsOpen = 0;
-				iLastWasClosed = 1;
+				iFound = TRUE;
+				iResult = TRUE;
 			}
-			iVBEnter (psDelay->iHandle, TRUE);
-			iLastHandle = psDelay->iHandle;
 		}
-		iVBDataFree (psDelay->iHandle, psDelay->tRowNumber);
+		if (tLength2 == tLength - INTSIZE)
+			break;
+		tLength = ldint (cLclBuffer + tLength - INTSIZE);
 	}
-	if (iLastHandle != -1)
+
+	psVBLogHeader = (struct SLOGHDR *) (cVBTransBuffer - INTSIZE);
+	tVBLseek (iVBLogfileHandle, tRcvSaveOffset, SEEK_SET);
+	return (iResult);
+}
+
+static	int
+iIgnore (int iPID)
+{
+	struct	STRANS
+		*psTrans = psTransHead;
+
+	while (psTrans && psTrans->iPID != iPID)
+		psTrans = psTrans->psNext;
+	if (psTrans && psTrans->iPID == iPID)
+		return (psTrans->iIgnoreMe);
+	return (FALSE);
+}
+
+static	int
+iRcvBuild (char *pcBuffer)
+{
+	char	*pcFilename;
+	int	iHandle,
+		iLoop,
+		iMode,
+		iMaxRowLen,
+		iPID;
+	struct	keydesc
+		sKeydesc;
+
+	iMode = ldint (pcBuffer);
+	iPID = ldint (psVBLogHeader->cPID);
+	if (iIgnore (iPID))
+		return (0);
+	isreclen = ldint (pcBuffer + INTSIZE);
+	iMaxRowLen = ldint (pcBuffer + (INTSIZE * 2));
+	sKeydesc.iFlags = ldint (pcBuffer + (INTSIZE * 3));
+	sKeydesc.iNParts = ldint (pcBuffer + (INTSIZE * 4));
+	pcBuffer += (INTSIZE * 6);
+	for (iLoop = 0; iLoop < sKeydesc.iNParts; iLoop++)
 	{
-		iVBExit (iLastHandle);
-		if (iLastWasClosed)
-			psVBFile [iLastHandle]->iIsOpen = 1;
+		sKeydesc.sPart [iLoop].iStart = ldint (pcBuffer + (iLoop * 3 * INTSIZE));
+		sKeydesc.sPart [iLoop].iLength = ldint (pcBuffer + INTSIZE + (iLoop * 3 * INTSIZE));
+		sKeydesc.sPart [iLoop].iType = ldint (pcBuffer + (INTSIZE * 2) + + (iLoop * 3 * INTSIZE));
 	}
-	while (sOpenTrans [iIndex].psDelayHead)
+	pcFilename = pcBuffer + (sKeydesc.iNParts * 3 * INTSIZE);
+	iHandle = isbuild (pcFilename, iMaxRowLen, &sKeydesc, iMode);
+	iMode = iserrno;	// Save any error result
+	if (iHandle != -1)
+		isclose (iHandle);
+	return (iMode);
+}
+
+static	int
+iRcvBegin (char *pcBuffer, int iLength)
+{
+	int	iPID;
+	struct	STRANS
+		*psTrans = psTransHead;
+
+	iPID = ldint (psVBLogHeader->cPID);
+	while (psTrans && psTrans->iPID != iPID)
+		psTrans = psTrans->psNext;
+	if (psTrans)
 	{
-		psDelay = sOpenTrans [iIndex].psDelayHead->psNext;
-		vVBFree (sOpenTrans [iIndex].psDelayHead, sizeof (struct VBDELAY));
-		sOpenTrans [iIndex].psDelayHead = psDelay;
+		printf ("Transaction for PID %d begun within current transaction!\n", iPID);
+		iRcvRollBack ();
 	}
-	for (iLoop = 0; iLoop <= iVBMaxUsedHandle; iLoop++)
-		if (psVBFile [iLoop] && psVBFile [iLoop]->iIsOpen == 1)
-		{
-			iIndex = iserrno;
-			if (!iVBClose2 (iLoop))
-				iserrno = iIndex;
-		}
+	psTrans = pvVBMalloc (sizeof (struct STRANS));
+	if (!psTrans)
+		return (ENOMEM);
+	psTrans->psPrev = STRANS_NULL;
+	psTrans->psNext = psTransHead;
+	if (psTransHead)
+		psTransHead->psPrev = psTrans;
+	psTransHead = psTrans;
+	psTrans->iPID = iPID;
+	psTrans->iIgnoreMe = iRcvCheckTrans (iLength, iPID);
+	return (0);
+}
+
+static	int
+iRcvCreateIndex (char *pcBuffer)
+{
+	int	iHandle,
+		iLoop,
+		iPID,
+		iSaveError = 0;
+	struct	keydesc
+		sKeydesc;
+
+	iHandle = ldint (pcBuffer);
+	iPID = ldint (psVBLogHeader->cPID);
+	if (iIgnore (iPID))
+		return (0);
+	iHandle = iGetRcvHandle (iHandle, iPID);
+	if (iHandle == -1)
+		return (ENOTOPEN);
+	sKeydesc.iFlags = ldint (pcBuffer + INTSIZE);
+	sKeydesc.iNParts = ldint (pcBuffer + (INTSIZE * 2));
+	pcBuffer += (INTSIZE * 4);
+	for (iLoop = 0; iLoop < sKeydesc.iNParts; iLoop++)
+	{
+		sKeydesc.sPart [iLoop].iStart = ldint (pcBuffer + (iLoop * 3 * INTSIZE));
+		sKeydesc.sPart [iLoop].iLength = ldint (pcBuffer + INTSIZE + (iLoop * 3 * INTSIZE));
+		sKeydesc.sPart [iLoop].iType = ldint (pcBuffer + (INTSIZE * 2) + + (iLoop * 3 * INTSIZE));
+	}
+	// Promote the file open lock to EXCLUSIVE
+	iserrno = iVBFileOpenLock (iHandle, 2);
+	if (iserrno)
+		return (iserrno);
+	psVBFile [iHandle]->iOpenMode |= ISEXCLLOCK;
+	if (isaddindex (iHandle, &sKeydesc))
+		iSaveError = iserrno;
+	// Demote the file open lock back to SHARED
+	psVBFile [iHandle]->iOpenMode &= ~ISEXCLLOCK;
+	iVBFileOpenLock (iHandle, 0);
+	iVBFileOpenLock (iHandle, 1);
+	return (iSaveError);
+}
+
+static	int
+iRcvCluster (char *pcBuffer)
+{
+	int	iPID;
+
+	iPID = ldint (psVBLogHeader->cPID);
+	if (iIgnore (iPID))
+		return (0);
+	fprintf (stderr, "iRcvCluster not yet implemented!\n");
+	return (0);
+}
+
+static	int
+iRcvCommit (char *pcBuffer)
+{
+	int	iLoop,
+		iPID;
+	struct	RCV_HDL
+		*psRcv;
+	struct	STRANS
+		*psTrans = psTransHead;
+
+	iPID = ldint (psVBLogHeader->cPID);
+	while (psTrans && psTrans->iPID != iPID)
+		psTrans = psTrans->psNext;
+	if (!psTrans)
+	{
+		printf ("Commit transaction for PID %d encountered without Begin!\n", iPID);
+		return (EBADLOG);
+	}
+	if (psTrans->psNext)
+		psTrans->psNext->psPrev = psTrans->psPrev;
+	if (psTrans->psPrev)
+		psTrans->psPrev->psNext = psTrans->psNext;
+	else
+		psTransHead = psTrans->psNext;
+	vVBFree (psTrans, sizeof (struct STRANS));
+	for (iLoop = 0; iLoop <= VB_MAX_FILES; iLoop++)
+	{
+		if (!psRecoverHandle [iLoop])
+			continue;
+		for (psRcv = psRecoverHandle [iLoop]; psRcv; psRcv = psRcv->psNext)
+			if (psRcv->iTransLock)
+				isrelease (psRcv->iHandle);
+	}
+	return (0);
+}
+
+static	int
+iRcvDelete (char *pcBuffer)
+{
+	char	*pcRow;
+	int	iHandle,
+		iPID;
+	off_t	tRowNumber;
+
+	iHandle = ldint (pcBuffer);
+	iPID = ldint (psVBLogHeader->cPID);
+	if (iIgnore (iPID))
+		return (0);
+	iHandle = iGetRcvHandle (iHandle, iPID);
+	if (iHandle == -1)
+		return (ENOTOPEN);
+	tRowNumber = ldquad (pcBuffer + INTSIZE);
+	pcRow = pcBuffer + INTSIZE + QUADSIZE + INTSIZE;
+	isdelrec (iHandle, tRowNumber);
+	return (iserrno);
+}
+
+static	int
+iRcvDeleteIndex (char *pcBuffer)
+{
+	int	iHandle,
+		iLoop,
+		iPID,
+		iSaveError = 0;
+	struct	keydesc
+		sKeydesc;
+
+	iHandle = ldint (pcBuffer);
+	iPID = ldint (psVBLogHeader->cPID);
+	if (iIgnore (iPID))
+		return (0);
+	iHandle = iGetRcvHandle (iHandle, iPID);
+	if (iHandle == -1)
+		return (ENOTOPEN);
+	sKeydesc.iFlags = ldint (pcBuffer + INTSIZE);
+	sKeydesc.iNParts = ldint (pcBuffer + (INTSIZE * 2));
+	pcBuffer += (INTSIZE * 4);
+	for (iLoop = 0; iLoop < sKeydesc.iNParts; iLoop++)
+	{
+		sKeydesc.sPart [iLoop].iStart = ldint (pcBuffer + (iLoop * 3 * INTSIZE));
+		sKeydesc.sPart [iLoop].iLength = ldint (pcBuffer + INTSIZE + (iLoop * 3 * INTSIZE));
+		sKeydesc.sPart [iLoop].iType = ldint (pcBuffer + (INTSIZE * 2) + + (iLoop * 3 * INTSIZE));
+	}
+	// Promote the file open lock to EXCLUSIVE
+	iserrno = iVBFileOpenLock (iHandle, 2);
+	if (iserrno)
+		return (iserrno);
+	psVBFile [iHandle]->iOpenMode |= ISEXCLLOCK;
+	if (isdelindex (iHandle, &sKeydesc))
+		iSaveError = iserrno;
+	// Demote the file open lock back to SHARED
+	psVBFile [iHandle]->iOpenMode &= ~ISEXCLLOCK;
+	iVBFileOpenLock (iHandle, 0);
+	iVBFileOpenLock (iHandle, 1);
+	return (iSaveError);
+}
+
+static	int
+iRcvFileErase (char *pcBuffer)
+{
+	int	iPID;
+
+	iPID = ldint (psVBLogHeader->cPID);
+	if (iIgnore (iPID))
+		return (0);
+	iserase (pcBuffer);
+	return (iserrno);
+}
+
+static	int
+iRcvFileClose (char *pcBuffer)
+{
+	int	iHandle,
+		iVarlenFlag,
+		iPID;
+	struct	RCV_HDL
+		*psRcv;
+
+	iHandle = ldint (pcBuffer);
+	iVarlenFlag = ldint (pcBuffer + INTSIZE);
+	iPID = ldint (psVBLogHeader->cPID);
+	if (iIgnore (iPID))
+		return (0);
+	psRcv = psRecoverHandle [iHandle];
+	while (psRcv && psRcv->iPID != iPID)
+		psRcv = psRcv->psNext;
+	if (!psRcv || psRcv->iPID != iPID)
+		return (ENOTOPEN);		// It wasn't open!
+	iserrno = 0;
+	isclose (psRcv->iHandle);
+	if (psRcv->psPrev)
+		psRcv->psPrev->psNext = psRcv->psNext;
+	else
+		psRecoverHandle [iHandle] = psRcv->psNext;
+	if (psRcv->psNext)
+		psRcv->psNext->psPrev = psRcv->psPrev;
+
+	return (iserrno);
+}
+
+static	int
+iRcvFileOpen (char *pcBuffer)
+{
+	int	iHandle,
+		iVarlenFlag,
+		iPID;
+	struct	RCV_HDL
+		*psRcv;
+
+	iHandle = ldint (pcBuffer);
+	iVarlenFlag = ldint (pcBuffer + INTSIZE);
+	iPID = ldint (psVBLogHeader->cPID);
+	if (iIgnore (iPID))
+		return (0);
+	if (iGetRcvHandle (iHandle, iPID) != -1)
+		return (ENOTOPEN);		// It was already open!
+	psRcv = psRcvAllocate ();
+	if (psRcv == RH_NULL)
+		return (ENOMEM);		// Oops
+	psRcv->iHandle = isopen (pcBuffer + INTSIZE + INTSIZE, ISINOUT | ISMANULOCK | (iVarlenFlag ? ISVARLEN : ISFIXLEN));
+	psRcv->iPID = iPID;
+	if (psRcv->iHandle < 0)
+	{
+		vRcvFree (psRcv);
+		return (iserrno);
+	}
+	psRcv->psPrev = RH_NULL;
+	psRcv->psNext = psRecoverHandle [iHandle];
+	if (psRecoverHandle [iHandle])
+		psRecoverHandle [iHandle]->psPrev = psRcv;
+	psRecoverHandle [iHandle] = psRcv;
+	return (0);
+}
+
+static	int
+iRcvInsert (char *pcBuffer)
+{
+	char	*pcRow;
+	int	iHandle,
+		iPID;
+	off_t	tRowNumber;
+
+	iHandle = ldint (pcBuffer);
+	iPID = ldint (psVBLogHeader->cPID);
+	if (iIgnore (iPID))
+		return (0);
+	iHandle = iGetRcvHandle (iHandle, iPID);
+	if (iHandle == -1)
+		return (ENOTOPEN);
+	tRowNumber = ldquad (pcBuffer + INTSIZE);
+	isreclen = ldint (pcBuffer + INTSIZE + QUADSIZE);
+	pcRow = pcBuffer + INTSIZE + QUADSIZE + INTSIZE;
+	if (iVBEnter (iHandle, TRUE))
+		return (iserrno);
+	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
+	if (iVBForceDataAllocate (iHandle, tRowNumber))
+		return (EDUPL);
+	if (iVBWriteRow (iHandle, pcRow, tRowNumber))
+		return (iserrno);
+	iVBExit (iHandle);
+	return (iserrno);
+}
+
+// NEEDS TESTING!
+static	int
+iRcvFileRename (char *pcBuffer)
+{
+	char	*pcOldName,
+		*pcNewName;
+	int	iOldNameLength,
+		iPID;
+
+	iPID = ldint (psVBLogHeader->cPID);
+	if (iIgnore (iPID))
+		return (0);
+	iOldNameLength = ldint (pcBuffer);
+	pcOldName = pcBuffer + INTSIZE + INTSIZE;
+	pcNewName = pcBuffer + INTSIZE + INTSIZE + iOldNameLength;
+	isrename (pcOldName, pcNewName);
+	return (iserrno);
+}
+
+static	int
+iRcvRollBack ()
+{
+	int	iPID;
+	struct	STRANS
+		*psTrans = psTransHead;
+
+	iPID = ldint (psVBLogHeader->cPID);
+	while (psTrans && psTrans->iPID != iPID)
+		psTrans = psTrans->psNext;
+	if (!psTrans)
+	{
+		printf ("Rollback transaction for PID %d encountered without Begin!\n", iPID);
+		return (EBADLOG);
+	}
+	if (psTrans->psNext)
+		psTrans->psNext->psPrev = psTrans->psPrev;
+	if (psTrans->psPrev)
+		psTrans->psPrev->psNext = psTrans->psNext;
+	else
+		psTransHead = psTrans->psNext;
+	vVBFree (psTrans, sizeof (struct STRANS));
+	return (0);
+}
+
+static	int
+iRcvSetUnique (char *pcBuffer)
+{
+	int	iHandle,
+		iPID;
+	off_t	tUniqueID;
+
+	iHandle = ldint (pcBuffer);
+	iPID = ldint (psVBLogHeader->cPID);
+	if (iIgnore (iPID))
+		return (0);
+	iHandle = iGetRcvHandle (iHandle, iPID);
+	if (iHandle == -1)
+		return (ENOTOPEN);
+	tUniqueID = ldquad (pcBuffer + INTSIZE);
+	issetunique (iHandle, tUniqueID);
+	return (iserrno);
+}
+
+static	int
+iRcvUniqueID (char *pcBuffer)
+{
+	int	iHandle,
+		iPID;
+	off_t	tUniqueID;
+
+	iHandle = ldint (pcBuffer);
+	iPID = ldint (psVBLogHeader->cPID);
+	if (iIgnore (iPID))
+		return (0);
+	iHandle = iGetRcvHandle (iHandle, iPID);
+	if (iHandle == -1)
+		return (ENOTOPEN);
+	tUniqueID = ldquad (pcBuffer + INTSIZE);
+	if (tUniqueID != ldquad (psVBFile [iHandle]->sDictNode.cUniqueID))
+		return (EBADFILE);
+	isuniqueid (iHandle, &tUniqueID);
+	return (0);
+}
+
+static	int
+iRcvUpdate (char *pcBuffer)
+{
+	char	*pcRow;
+	int	iHandle,
+		iPID;
+	off_t	tRowNumber;
+
+	iHandle = ldint (pcBuffer);
+	iPID = ldint (psVBLogHeader->cPID);
+	if (iIgnore (iPID))
+		return (0);
+	iHandle = iGetRcvHandle (iHandle, iPID);
+	if (iHandle == -1)
+		return (ENOTOPEN);
+	tRowNumber = ldquad (pcBuffer + INTSIZE);
+	isreclen = ldint (pcBuffer + INTSIZE + QUADSIZE);
+	pcRow = pcBuffer + INTSIZE + QUADSIZE + INTSIZE + INTSIZE + isreclen;
+	isreclen = ldint (pcBuffer + INTSIZE + QUADSIZE + INTSIZE);
+	isrewrec (iHandle, tRowNumber, pcRow);
+	return (iserrno);
 }
