@@ -7,9 +7,12 @@
  *	This is the module that deals with *ALL* memory (de-)allocation for the
  *	VBISAM library.
  * Version:
- *	$Id: vbMemIO.c,v 1.3 2004/01/03 02:28:48 trev_vb Exp $
+ *	$Id: vbMemIO.c,v 1.4 2004/01/03 07:28:54 trev_vb Exp $
  * Modification History:
  *	$Log: vbMemIO.c,v $
+ *	Revision 1.4  2004/01/03 07:28:54  trev_vb
+ *	TvB 02Jan2004 Oooops, I forgot to vVBFree the pcWriteBuffer
+ *	
  *	Revision 1.3  2004/01/03 02:28:48  trev_vb
  *	TvB 02Jan2004 WAY too many changes to enumerate!
  *	TvB 02Jan2003 Transaction processing done (excluding iscluster)
@@ -448,6 +451,8 @@ vVBUnMalloc (void)
 
 	if (pcRowBuffer)
 		vVBFree (pcRowBuffer, iVBRowBufferLength);
+	if (pcWriteBuffer)
+		vVBFree (pcWriteBuffer, iVBRowBufferLength);
 	pcRowBuffer = (char *) 0;
 	while (psLockCurr)
 	{
