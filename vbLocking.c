@@ -8,9 +8,13 @@
  *	This module handles the locking on both the index and data files for the
  *	VBISAM library.
  * Version:
- *	$Id: vbLocking.c,v 1.9 2004/06/16 10:53:56 trev_vb Exp $
+ *	$Id: vbLocking.c,v 1.10 2004/06/22 09:53:28 trev_vb Exp $
  * Modification History:
  *	$Log: vbLocking.c,v $
+ *	Revision 1.10  2004/06/22 09:53:28  trev_vb
+ *	22June2004 TvB Various changes to better deal with multiple concurrent
+ *	22June2004 TvB processes accessing the same table
+ *	
  *	Revision 1.9  2004/06/16 10:53:56  trev_vb
  *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
  *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
@@ -130,7 +134,10 @@ iVBEnter (int iHandle, int iModifying)
 	}
 	psVBFile [iHandle]->sFlags.iIndexChanged = 0;
 	if (psVBFile [iHandle]->iOpenMode & ISEXCLLOCK)
+	{
+		psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x01;
 		return (0);
+	}
 	if (psVBFile [iHandle]->sFlags.iIsDictLocked & 0x03)
 	{
 		iserrno = EBADARG;
@@ -143,6 +150,7 @@ iVBEnter (int iHandle, int iModifying)
 	memset (cVBNode [0], 0xff, QUADSIZE);
 	cVBNode [0] [0] = 0x3f;
 	tLength = ldquad (cVBNode [0]);
+	psVBFile [iHandle]->sFlags.iIndexChanged = 0;
 	if (!(psVBFile [iHandle]->iOpenMode & ISEXCLLOCK))
 	{
 		iResult = iVBLock (psVBFile [iHandle]->iIndexHandle, 0, tLength, iLockMode);
@@ -160,11 +168,25 @@ iVBEnter (int iHandle, int iModifying)
 		memcpy ((void *) &psVBFile [iHandle]->sDictNode, (void *) cVBNode [0], sizeof (struct DICTNODE));
 	}
 	psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x01;
-	if (psVBFile [iHandle]->tTransLast == ldquad (psVBFile [iHandle]->sDictNode.cTransNumber))
-		psVBFile [iHandle]->sFlags.iIndexChanged = 0;
-	else
+	if (psVBFile [iHandle]->tTransLast != ldquad (psVBFile [iHandle]->sDictNode.cTransNumber))
 	{
-		psVBFile [iHandle]->sFlags.iIndexChanged = 1;
+/*
+ * If we're in C-ISAM mode, then there is NO way to determine if a given node
+ * has been updated by some other process.  Thus *ANY* change to the index
+ * file needs to invalidate the ENTIRE cache for that table!!!
+ * If we're in VBISAM 64-bit mode, then each node in the index table has a
+ * stamp on it stating the transaction number when it was updated.  If this
+ * stamp is BELOW that of the current transaction number, we know that the
+ * associated VBTREE / VBKEY linked lists are still coherent!
+ */
+#if	ISAMMODE == 0
+		for (iLoop = 0; iLoop < MAXSUBS; iLoop++)
+		{
+			if (psVBFile [iHandle]->psTree [iLoop])
+				vVBTreeAllFree (iHandle, iLoop, psVBFile [iHandle]->psTree [iLoop]);
+			psVBFile [iHandle]->psTree [iLoop] = VBTREE_NULL;
+		}
+#endif	// ISAMMODE == 0
 		vVBBlockInvalidate (iHandle);
 	}
 	return (0);
