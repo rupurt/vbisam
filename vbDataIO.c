@@ -7,9 +7,13 @@
  *	This module handles ALL the low level data file I/O operations for the
  *	VBISAM library.
  * Version:
- *	$Id: vbDataIO.c,v 1.3 2004/01/03 02:28:48 trev_vb Exp $
+ *	$Id: vbDataIO.c,v 1.4 2004/01/03 07:14:21 trev_vb Exp $
  * Modification History:
  *	$Log: vbDataIO.c,v $
+ *	Revision 1.4  2004/01/03 07:14:21  trev_vb
+ *	TvB 02Jan2004 Ooops, I should ALWAYS try to remember to be in the RIGHT
+ *	TvB 02Jan2003 directory when I check code back into CVS!!!
+ *	
  *	Revision 1.3  2004/01/03 02:28:48  trev_vb
  *	TvB 02Jan2004 WAY too many changes to enumerate!
  *	TvB 02Jan2003 Transaction processing done (excluding iscluster)
@@ -83,11 +87,11 @@ iVBDataRead (int iHandle, void *pvBuffer, int *piDeletedRow, off_t tRowNumber, i
 	tOffset = iRowLength * (tRowNumber - 1);
 	tBlockNumber = (tOffset / psVBFile [iHandle]->iNodeSize);
 	tOffset -= (tBlockNumber * psVBFile [iHandle]->iNodeSize);
+	if (iVBBlockRead (iHandle, FALSE, tBlockNumber + 1, cNode0))
+		return (EBADFILE);
 	// Read in the *MINIMUM* rowlength and store it into pvBuffer
 	while (tSoFar < psVBFile [iHandle]->iMinRowLength)
 	{
-		if (iVBBlockRead (iHandle, FALSE, tBlockNumber + 1, cNode0))
-			return (EBADFILE);
 		if ((psVBFile [iHandle]->iMinRowLength - tSoFar) < (psVBFile [iHandle]->iNodeSize - tOffset))
 		{
 			memcpy (pvBuffer + tSoFar, cNode0 + tOffset, psVBFile [iHandle]->iMinRowLength - tSoFar);
@@ -99,6 +103,8 @@ iVBDataRead (int iHandle, void *pvBuffer, int *piDeletedRow, off_t tRowNumber, i
 		tBlockNumber++;
 		tSoFar += psVBFile [iHandle]->iNodeSize - tOffset;
 		tOffset = 0;
+		if (iVBBlockRead (iHandle, FALSE, tBlockNumber + 1, cNode0))
+			return (EBADFILE);
 	}
 	// OK, now for the footer.  Either 1 byte or 1 + INTSIZE + QUADSIZE.
 	while (tSoFar < iRowLength)

@@ -6,9 +6,13 @@
  * Description:
  *	This module handles ALL the key manipulation for the VBISAM library.
  * Version:
- *	$Id: vbKeysIO.c,v 1.4 2004/01/03 02:28:48 trev_vb Exp $
+ *	$Id: vbKeysIO.c,v 1.5 2004/01/03 07:14:43 trev_vb Exp $
  * Modification History:
  *	$Log: vbKeysIO.c,v $
+ *	Revision 1.5  2004/01/03 07:14:43  trev_vb
+ *	TvB 02Jan2004 Ooops, I should ALWAYS try to remember to be in the RIGHT
+ *	TvB 02Jan2003 directory when I check code back into CVS!!!
+ *	
  *	Revision 1.4  2004/01/03 02:28:48  trev_vb
  *	TvB 02Jan2004 WAY too many changes to enumerate!
  *	TvB 02Jan2003 Transaction processing done (excluding iscluster)
@@ -1081,17 +1085,9 @@ iKeyCompare (int iHandle, int iKeyNumber, int iLength, unsigned char *pcKey1, un
 			while (iLengthToCompare-- && !iResult)
 			{
 				if (*pcKey1 < *pcKey2)
-				{
-					iResult = -(iDescBias);
-					break;
-				}
-				if (*pcKey1 > *pcKey2)
-				{
-					iResult = iDescBias;
-					break;
-				}
-				pcKey1++;
-				pcKey2++;
+					return (-iDescBias);
+				if (*pcKey1++ > *pcKey2++)
+					return (iDescBias);
 			}
 			break;
 
@@ -1101,15 +1097,9 @@ iKeyCompare (int iHandle, int iKeyNumber, int iLength, unsigned char *pcKey1, un
 				iValue1 = ldint (pcKey1);
 				iValue2 = ldint (pcKey2);
 				if (iValue1 < iValue2)
-				{
-					iResult = -(iDescBias);
-					break;
-				}
+					return (-iDescBias);
 				if (iValue1 > iValue2)
-				{
-					iResult = iDescBias;
-					break;
-				}
+					return (iDescBias);
 				pcKey1 += INTSIZE;
 				pcKey2 += INTSIZE;
 				iLengthToCompare -= INTSIZE;
@@ -1122,20 +1112,14 @@ iKeyCompare (int iHandle, int iKeyNumber, int iLength, unsigned char *pcKey1, un
 				lValue1 = ldlong (pcKey1);
 				lValue2 = ldlong (pcKey2);
 				if (lValue1 < lValue2)
-				{
-					iResult = -(iDescBias);
-					break;
-				}
+					return (-iDescBias);
 				if (lValue1 > lValue2)
-				{
-					iResult = iDescBias;
-					break;
-				}
+					return (iDescBias);
 				pcKey1 += LONGSIZE;
 				pcKey2 += LONGSIZE;
 				iLengthToCompare -= LONGSIZE;
 			}
-			return (0);
+			break;
 
 		case	QUADTYPE:
 			while (iLengthToCompare >= QUADSIZE && !iResult)
@@ -1143,15 +1127,9 @@ iKeyCompare (int iHandle, int iKeyNumber, int iLength, unsigned char *pcKey1, un
 				tValue1 = ldquad (pcKey1);
 				tValue2 = ldquad (pcKey2);
 				if (tValue1 < tValue2)
-				{
-					iResult = -(iDescBias);
-					break;
-				}
+					return (-iDescBias);
 				if (tValue1 > tValue2)
-				{
-					iResult = iDescBias;
-					break;
-				}
+					return (iDescBias);
 				pcKey1 += QUADSIZE;
 				pcKey2 += QUADSIZE;
 				iLengthToCompare -= QUADSIZE;
@@ -1164,15 +1142,9 @@ iKeyCompare (int iHandle, int iKeyNumber, int iLength, unsigned char *pcKey1, un
 				fValue1 = ldfloat (pcKey1);
 				fValue2 = ldfloat (pcKey2);
 				if (fValue1 < fValue2)
-				{
-					iResult = -(iDescBias);
-					break;
-				}
+					return (-iDescBias);
 				if (fValue1 > fValue2)
-				{
-					iResult = iDescBias;
-					break;
-				}
+					return (iDescBias);
 				pcKey1 += FLOATSIZE;
 				pcKey2 += FLOATSIZE;
 				iLengthToCompare -= FLOATSIZE;
@@ -1185,29 +1157,21 @@ iKeyCompare (int iHandle, int iKeyNumber, int iLength, unsigned char *pcKey1, un
 				dValue1 = lddbl (pcKey1);
 				dValue2 = lddbl (pcKey2);
 				if (dValue1 < dValue2)
-				{
-					iResult = -(iDescBias);
-					break;
-				}
+					return (-iDescBias);
 				if (dValue1 > dValue2)
-				{
-					iResult = iDescBias;
-					break;
-				}
+					return (iDescBias);
 				pcKey1 += DOUBLESIZE;
 				pcKey2 += DOUBLESIZE;
 				iLengthToCompare -= DOUBLESIZE;
 			}
-			return (0);
+			break;
 
 		default:
 			fprintf (stderr, "HUGE ERROR! File %s, Line %d iType %d\n", __FILE__, __LINE__, psKeydesc->sPart [iPart].iType);
 			exit (1);
 		}
-		if (iResult)
-			return (iResult);
 	}
-	return (iResult);
+	return (0);
 }
 
 /*
