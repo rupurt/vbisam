@@ -1,3 +1,33 @@
+1.04
+====
+Fixes List
+----------
+vbNodeMemIO.c:
+	Finally fixed up the iVBNodeSave and split routines the RIGHT way.
+	The vFixTOFEOF function was always a kludge to hide a bug anyway!
+Known Issues
+------------
+Unknown:
+	The duplicate number in an index node can increment indefinitely on
+	an index where ISDUPS is specified.  After a significant number (2^31
+	iterations in C-ISAM mode), the duplicate number overflows!  C-ISAM also
+	has this same issue.
+Uncertain (but MOSTLY in vbKeysIO.c):
+	Two-phase commit (2PC) still needs to be done
+vbCheck.c:
+	Still not able to process ISVARLEN files
+	Since vbCheck doesn't call iVBExit until it's finished all its work, it
+	becomes a REAL memory hog!  (See vbMemIO.c below)
+vbMemIO.c:
+	More of a 'suggestion' than an 'issue'.  It's probably wise to 'limit'
+	the amount of RAM any given VBISAM process can allocate.  An environment
+	variable would be the logical way to do this.  Also, it'd might be cool
+	to make it so that you could allow a maximum of X bytes per table with
+	an overall limit of Y bytes for the process as a whole.
+Documentation:
+	Heck, I need to write a whole freaking BOOK!!!
+	Reminder to self to include the environment variables in the docs
+================================================================================
 1.03
 ====
 Fixes list

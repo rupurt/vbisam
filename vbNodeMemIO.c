@@ -9,9 +9,14 @@
  *	linked-lists and writing a node to disk from the memory-based linked-
  *	lists.  The latter possibly causing a split to occur.
  * Version:
- *	$Id: vbNodeMemIO.c,v 1.4 2004/06/16 10:53:56 trev_vb Exp $
+ *	$Id: vbNodeMemIO.c,v 1.5 2004/06/17 00:21:49 trev_vb Exp $
  * Modification History:
  *	$Log: vbNodeMemIO.c,v $
+ *	Revision 1.5  2004/06/17 00:21:49  trev_vb
+ *	16June2004 TvB Finally *FIXED* the iVBNodeSave function and its subsidiary
+ *	16June2004 TvB functions for splitting et al.  Removed vFixTOFEOF as this
+ *	16June2004 TvB was ALWAYS just a kludge to hide the bug in iVBNodeSave
+ *	
  *	Revision 1.4  2004/06/16 10:53:56  trev_vb
  *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
  *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
@@ -36,7 +41,6 @@
 int	iVBNodeLoad (int, int, struct VBTREE *, off_t, int);
 int	iVBNodeSave (int, int, struct VBTREE *, off_t, int, int);
 static	int	iQuickNodeSave (int, struct VBTREE *, off_t, struct keydesc *, int, int);
-static	void	vFixTOFEOF (int, int);
 static	int	iNodeSplit (int, int, struct VBTREE *, struct VBKEY *);
 static	int	iNewRoot (int, int, struct VBTREE *, struct VBTREE *, struct VBTREE *, struct VBKEY *[], off_t, off_t);
 #define		TCC	(' ')		// Trailing Compression Character
@@ -262,10 +266,7 @@ iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 			psTree->psKeyLast->psPrev->sFlags.iIsHigh = 1;
 	if (iMode && !(psKeydesc->iFlags & (DCOMPRESS | TCOMPRESS | LCOMPRESS)))
 		if (iQuickNodeSave (iHandle, psTree, tNodeNumber, psKeydesc, iMode, iPosn) == 0)
-		{
-			vFixTOFEOF (iHandle, iKeyNumber);
 			return (0);
-		}
 	pcNodeHalfway = cVBNode [0] + (psVBFile [iHandle]->iNodeSize / 2);
 	pcNodeEnd = cVBNode [0] + psVBFile [iHandle]->iNodeSize - 2;
 	memset (cVBNode [0], 0, MAX_NODE_LENGTH);
@@ -348,7 +349,6 @@ iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 			if (psTree->psKeyLast->psPrev->sFlags.iIsHigh && psTree->psKeyLast->psPrev->psPrev->sFlags.iIsNew)
 				psKeyHalfway = psTree->psKeyLast->psPrev->psPrev->psPrev;
 			iResult = iNodeSplit (iHandle, iKeyNumber, psTree, psKeyHalfway);
-			vFixTOFEOF (iHandle, iKeyNumber);
 			return (iResult);
 		}
 		if (((iKeyLen == (QUADSIZE * 2)) && ((psKeydesc->iFlags & (DCOMPRESS | ISDUPS)) == (DCOMPRESS | ISDUPS))) || (psKeydesc->iFlags & DCOMPRESS && !(psKeydesc->iFlags & ISDUPS) && iKeyLen == QUADSIZE))
@@ -415,7 +415,6 @@ iVBNodeSave (int iHandle, int iKeyNumber, struct VBTREE *psTree, off_t tNodeNumb
 	iResult = iVBBlockWrite (iHandle, TRUE, tNodeNumber, cVBNode [0]);
 	if (iResult)
 		return (iResult);
-	vFixTOFEOF (iHandle, iKeyNumber);
 	return (0);
 }
 
@@ -493,48 +492,6 @@ iQuickNodeSave (int iHandle, struct VBTREE *psTree, off_t tNodeNumber, struct ke
 	if (iResult)
 		return (iResult);
 	return (0);
-}
-
-/*
- * Name:
- *	static	void	vFixTOFEOF (int iHandle, int iKeyNumber);
- * Arguments:
- *	int	iHandle
- *		The open file descriptor of the VBISAM file (Not the dat file)
- *	int	iKeyNumber
- *		GUESS!
- * Prerequisites:
- *	NONE
- * Returns:
- *	NONE
- * Problems:
- *	NONE known
- */
-static	void
-vFixTOFEOF (int iHandle, int iKeyNumber)
-{
-	struct	VBTREE
-		*psTree;
-
-	psTree = psVBFile [iHandle]->psTree [iKeyNumber];
-	while (psTree)
-	{
-		psTree->sFlags.iIsTOF = TRUE;
-		if (psTree->psKeyFirst->sFlags.iIsDummy)
-			break;
-		psTree = psTree->psKeyFirst->psChild;
-	}
-	psTree = psVBFile [iHandle]->psTree [iKeyNumber];
-	while (psTree)
-	{
-		psTree->sFlags.iIsEOF = TRUE;
-		if (!psTree->sFlags.iLevel)
-			break;		// Empty file huh?
-		if (psTree->psKeyLast->psPrev)
-			psTree = psTree->psKeyLast->psPrev->psChild;
-		else
-			break;
-	}
 }
 
 /*
@@ -641,7 +598,6 @@ psNewKey->psParent = psNewTree;	// Doubtful
 		}
 		psNewTree->sFlags.iLevel = psTree->sFlags.iLevel;
 		psNewTree->psParent = psTree->psParent;
-		psNewTree->sFlags.iIsTOF = psTree->sFlags.iIsTOF;
 		/*
 		 * psNewTree is the new LEAF node but is stored in the OLD node
 		 * psTree is the original node and contains the HIGH half
@@ -650,6 +606,7 @@ psNewKey->psParent = psNewTree;	// Doubtful
 		iResult = iVBNodeSave (iHandle, iKeyNumber, psNewTree, psNewTree->tNodeNumber, 0, 0);
 		if (iResult)
 			return (iResult);
+		psNewTree->sFlags.iIsTOF = psTree->sFlags.iIsTOF;
 		iResult = iVBNodeSave (iHandle, iKeyNumber, psTree, psTree->tNodeNumber, 0, 0);
 		if (iResult)
 			return (iResult);
@@ -728,12 +685,9 @@ iNewRoot (int iHandle, int iKeyNumber, struct VBTREE *psTree, struct VBTREE *psN
 	psRootTree->sFlags.iIsEOF = 1;
 	psTree->psParent = psRootTree;
 	psTree->tNodeNumber = tNewNode2;
-	psTree->sFlags.iIsRoot = 0;
-	psTree->sFlags.iIsEOF = 0;
 	psNewTree->psParent = psRootTree;
 	psNewTree->tNodeNumber = tNewNode1;
 	psNewTree->sFlags.iLevel = psTree->sFlags.iLevel;
-	psNewTree->sFlags.iIsEOF = 1;
 	psNewTree->psKeyCurr = psNewTree->psKeyFirst;
 	psVBFile [iHandle]-> psTree [iKeyNumber] = psRootTree;
 	for (psKey = psTree->psKeyFirst; psKey; psKey = psKey->psNext)
@@ -748,5 +702,11 @@ iNewRoot (int iHandle, int iKeyNumber, struct VBTREE *psTree, struct VBTREE *psN
 	iResult = iVBNodeSave (iHandle, iKeyNumber, psTree, psTree->tNodeNumber, 0, 0);
 	if (iResult)
 		return (iResult);
+	psTree->sFlags.iIsRoot = 0;
+	psNewTree->sFlags.iIsRoot = 0;
+	psTree->sFlags.iIsTOF = 1;
+	psNewTree->sFlags.iIsTOF = 0;
+	psTree->sFlags.iIsEOF = 0;
+	psNewTree->sFlags.iIsEOF = 1;
 	return (iVBNodeSave (iHandle, iKeyNumber, psRootTree, psRootTree->tNodeNumber, 0, 0));
 }
