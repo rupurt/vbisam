@@ -8,9 +8,12 @@
  *	This is the module that deals with *ALL* memory (de-)allocation for the
  *	VBISAM library.
  * Version:
- *	$Id: vbMemIO.c,v 1.8 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: vbMemIO.c,v 1.9 2004/06/22 09:55:19 trev_vb Exp $
  * Modification History:
  *	$Log: vbMemIO.c,v $
+ *	Revision 1.9  2004/06/22 09:55:19  trev_vb
+ *	22June2004 TvB Forced a few extra 'resets' of memory when being unallocated
+ *	
  *	Revision 1.8  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -276,11 +279,16 @@ void	vVBKeyAllFree (int iHandle, int iKeyNumber, struct VBTREE *psTree)
 		psKeyNext = psKeyCurr->psNext;
 		if (psKeyCurr->psChild)
 			vVBTreeAllFree (iHandle, iKeyNumber, psKeyCurr->psChild);
+		psKeyCurr->psChild = VBTREE_NULL;
 		psKeyCurr->psNext = psVBFile [iHandle]->psKeyFree [iKeyNumber];
 		psVBFile [iHandle]->psKeyFree [iKeyNumber] = psKeyCurr;
 		psKeyCurr->tRowNode = -1;
 		psKeyCurr = psKeyNext;
 	}
+	psTree->psKeyFirst = VBKEY_NULL;
+	psTree->psKeyLast = VBKEY_NULL;
+	psTree->psKeyCurr = VBKEY_NULL;
+	psTree->sFlags.iKeysInNode = 0;
 	return;
 }
 
@@ -310,6 +318,7 @@ void	vVBKeyFree (int iHandle, int iKeyNumber, struct VBKEY *psKey)
 #endif	// DEBUG
 	if (psKey->psChild)
 		vVBTreeAllFree (iHandle, iKeyNumber, psKey->psChild);
+	psKey->psChild = VBTREE_NULL;
 	if (psKey->psNext)
 		psKey->psNext->psPrev = psKey->psPrev;
 	if (psKey->psPrev)
@@ -447,12 +456,14 @@ pvVBMalloc (size_t tLength)
 		pvPointer = malloc (tLength);
 	// Note from Robin: "Holy pointers batman, we're REALLY out of memory!"
 	if (!pvPointer)
+	{
 		fprintf (stderr, "MALLOC FAULT!\n");
+		fflush (stderr);
+	}
 	else
 		tMallocUsed += tLength;
 	if (tMallocUsed > tMallocMax)
 		tMallocMax = tMallocUsed;
-	fflush (stderr);
 	return (pvPointer);
 }
 
