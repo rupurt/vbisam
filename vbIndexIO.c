@@ -8,9 +8,12 @@
  *	This module handles ALL the low level index file I/O operations for the
  *	VBISAM library.
  * Version:
- *	$Id: vbIndexIO.c,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: vbIndexIO.c,v 1.8 2004/06/22 09:52:13 trev_vb Exp $
  * Modification History:
  *	$Log: vbIndexIO.c,v $
+ *	Revision 1.8  2004/06/22 09:52:13  trev_vb
+ *	22June2004 TvB Set the dictionary has changed flag a little earlier!
+ *	
  *	Revision 1.7  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -501,6 +504,7 @@ tVBDataAllocate (int iHandle)
 		iLengthUsed = ldint (cVBNode [0]);
 		if (iLengthUsed > INTSIZE + QUADSIZE)
 		{
+			psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 			iLengthUsed -= QUADSIZE;
 			stint (iLengthUsed, cVBNode [0]);
 			tValue = ldquad (&cVBNode [0] [iLengthUsed]);
@@ -518,7 +522,6 @@ tVBDataAllocate (int iHandle)
 			if (iResult)
 				return (-1);
 			stquad (tNextNode, psVBFile [iHandle]->sDictNode.cDataFree);
-			psVBFile [iHandle]->sFlags.iIsDictLocked |= 0x02;
 			return (tValue);
 		}
 		// Ummmm, this is an INTEGRITY ERROR of sorts!
