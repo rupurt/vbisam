@@ -8,9 +8,12 @@
  *	This is the header that defines the internally used structures for the
  *	VBISAM library.
  * Version:
- *	$Id: isinternal.h,v 1.6 2004/01/06 14:31:59 trev_vb Exp $
+ *	$Id: isinternal.h,v 1.7 2004/03/23 21:55:56 trev_vb Exp $
  * Modification History:
  *	$Log: isinternal.h,v $
+ *	Revision 1.7  2004/03/23 21:55:56  trev_vb
+ *	TvB 23Mar2004 Endian on SPARC (Phase I).  Makefile changes for SPARC.
+ *	
  *	Revision 1.6  2004/01/06 14:31:59  trev_vb
  *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
  *	
@@ -54,6 +57,19 @@
 #undef	TRUE
 #endif
 #define	TRUE	((!FALSE))
+
+#ifdef	VB_ENDIAN
+#undef	VB_ENDIAN
+#endif
+#ifdef	sparc
+#define	VB_ENDIAN	1234
+#endif
+#ifdef	i386
+#define	VB_ENDIAN	4321
+#endif
+#ifndef	VB_ENDIAN
+Error! I do not know whether the CPU is big or little endian! HELP me!
+#endif
 
 // Implementation limits
 // DEV versions have a fixed maximum node length of 256 bytes

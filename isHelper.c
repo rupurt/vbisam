@@ -9,9 +9,12 @@
  *	Only functions with external linkage (i.e. is*, ld* and st*) should be
  *	defined within this module.
  * Version:
- *	$Id: isHelper.c,v 1.5 2004/01/06 14:31:59 trev_vb Exp $
+ *	$Id: isHelper.c,v 1.6 2004/03/23 21:55:56 trev_vb Exp $
  * Modification History:
  *	$Log: isHelper.c,v $
+ *	Revision 1.6  2004/03/23 21:55:56  trev_vb
+ *	TvB 23Mar2004 Endian on SPARC (Phase I).  Makefile changes for SPARC.
+ *	
  *	Revision 1.5  2004/01/06 14:31:59  trev_vb
  *	TvB 06Jan2004 Added in VARLEN processing (In a fairly unstable sorta way)
  *	
@@ -518,8 +521,13 @@ ldint (char *pcLocation)
 	short	iValue = 0;
 	char	*pcTemp = (char *) &iValue;
 
+#if	VB_ENDIAN == 4321
 	*(pcTemp + 1) = *(pcLocation + 0);
 	*(pcTemp + 0) = *(pcLocation + 1);
+#else
+	*(pcTemp + 0) = *(pcLocation + 0);
+	*(pcTemp + 1) = *(pcLocation + 1);
+#endif
 	return (iValue);
 }
 
@@ -543,8 +551,13 @@ stint (int iValue, char *pcLocation)
 {
 	char	*pcTemp = (char *) &iValue;
 
+#if	VB_ENDIAN == 4321
 	*(pcLocation + 0) = *(pcTemp + 1);
 	*(pcLocation + 1) = *(pcTemp + 0);
+#else
+	*(pcLocation + 0) = *(pcTemp + 0);
+	*(pcLocation + 1) = *(pcTemp + 1);
+#endif
 	return;
 }
 
@@ -567,10 +580,17 @@ ldlong (char *pcLocation)
 	long	lValue;
 	char	*pcTemp = (char *) &lValue;
 
+#if	VB_ENDIAN == 4321
 	*(pcTemp + 3) = *(pcLocation + 0);
 	*(pcTemp + 2) = *(pcLocation + 1);
 	*(pcTemp + 1) = *(pcLocation + 2);
 	*(pcTemp + 0) = *(pcLocation + 3);
+#else
+	*(pcTemp + 0) = *(pcLocation + 0);
+	*(pcTemp + 1) = *(pcLocation + 1);
+	*(pcTemp + 2) = *(pcLocation + 2);
+	*(pcTemp + 3) = *(pcLocation + 3);
+#endif
 	return (lValue);
 }
 
@@ -594,10 +614,17 @@ stlong (long lValue, char *pcLocation)
 {
 	char	*pcTemp = (char *) &lValue;
 
+#if	VB_ENDIAN == 4321
 	*(pcLocation + 0) = *(pcTemp + 3);
 	*(pcLocation + 1) = *(pcTemp + 2);
 	*(pcLocation + 2) = *(pcTemp + 1);
 	*(pcLocation + 3) = *(pcTemp + 0);
+#else
+	*(pcLocation + 0) = *(pcTemp + 0);
+	*(pcLocation + 1) = *(pcTemp + 1);
+	*(pcLocation + 2) = *(pcTemp + 2);
+	*(pcLocation + 3) = *(pcTemp + 3);
+#endif
 	return;
 }
 
@@ -620,6 +647,7 @@ ldquad (char *pcLocation)
 	off_t	tValue;
 	char	*pcTemp = (char *) &tValue;
 
+#if	VB_ENDIAN == 4321
 #if	_FILE_OFFSET_BITS == 64
 	*(pcTemp + 7) = *(pcLocation + 0);
 	*(pcTemp + 6) = *(pcLocation + 1);
@@ -635,6 +663,23 @@ ldquad (char *pcLocation)
 	*(pcTemp + 1) = *(pcLocation + 2);
 	*(pcTemp + 0) = *(pcLocation + 3);
 #endif	// _FILE_OFFSET_BITS == 64
+#else	// VB_ENDIAN == 4321
+#if	_FILE_OFFSET_BITS == 64
+	*(pcTemp + 0) = *(pcLocation + 0);
+	*(pcTemp + 1) = *(pcLocation + 1);
+	*(pcTemp + 2) = *(pcLocation + 2);
+	*(pcTemp + 3) = *(pcLocation + 3);
+	*(pcTemp + 4) = *(pcLocation + 4);
+	*(pcTemp + 5) = *(pcLocation + 5);
+	*(pcTemp + 6) = *(pcLocation + 6);
+	*(pcTemp + 7) = *(pcLocation + 7);
+#else	// _FILE_OFFSET_BITS == 64
+	*(pcTemp + 0) = *(pcLocation + 0);
+	*(pcTemp + 1) = *(pcLocation + 1);
+	*(pcTemp + 2) = *(pcLocation + 2);
+	*(pcTemp + 3) = *(pcLocation + 3);
+#endif	// _FILE_OFFSET_BITS == 64
+#endif	// VB_ENDIAN == 4321
 	return (tValue);
 }
 
@@ -658,6 +703,7 @@ stquad (off_t tValue, char *pcLocation)
 {
 	char	*pcTemp = (char *) &tValue;
 
+#if	VB_ENDIAN == 4321
 #if	_FILE_OFFSET_BITS == 64
 	*(pcLocation + 0) = *(pcTemp + 7);
 	*(pcLocation + 1) = *(pcTemp + 6);
@@ -673,6 +719,23 @@ stquad (off_t tValue, char *pcLocation)
 	*(pcLocation + 2) = *(pcTemp + 1);
 	*(pcLocation + 3) = *(pcTemp + 0);
 #endif	// _FILE_OFFSET_BITS == 64
+#else	// VB_ENDIAN == 4321
+#if	_FILE_OFFSET_BITS == 64
+	*(pcLocation + 0) = *(pcTemp + 0);
+	*(pcLocation + 1) = *(pcTemp + 1);
+	*(pcLocation + 2) = *(pcTemp + 2);
+	*(pcLocation + 3) = *(pcTemp + 3);
+	*(pcLocation + 4) = *(pcTemp + 4);
+	*(pcLocation + 5) = *(pcTemp + 5);
+	*(pcLocation + 6) = *(pcTemp + 6);
+	*(pcLocation + 7) = *(pcTemp + 7);
+#else	// _FILE_OFFSET_BITS == 64
+	*(pcLocation + 0) = *(pcTemp + 0);
+	*(pcLocation + 1) = *(pcTemp + 1);
+	*(pcLocation + 2) = *(pcTemp + 2);
+	*(pcLocation + 3) = *(pcTemp + 3);
+#endif	// _FILE_OFFSET_BITS == 64
+#endif	// VB_ENDIAN == 4321
 	return;
 }
 

@@ -5,9 +5,12 @@
 # Description:
 #	This is the main makefile that BUILDS all this stuff (I hope)
 # Version:
-#	$Id: Makefile,v 1.6 2004/03/23 15:13:19 trev_vb Exp $
+#	$Id: Makefile,v 1.7 2004/03/23 21:55:55 trev_vb Exp $
 # Modification History:
 #	$Log: Makefile,v $
+#	Revision 1.7  2004/03/23 21:55:55  trev_vb
+#	TvB 23Mar2004 Endian on SPARC (Phase I).  Makefile changes for SPARC.
+#	
 #	Revision 1.6  2004/03/23 15:13:19  trev_vb
 #	TvB 23Mar2004 Changes made to fix bugs highlighted by JvN's test suite.  Many thanks go out to JvN for highlighting my obvious mistakes.
 #	
@@ -43,6 +46,7 @@ SLB	= /usr/lib/lib$(LIB).so
 # -D_FILE_OFFSET_BITS=64:
 #		Produces 64-bit file-I/O code (Files incompatable with 32-bit)
 # ****************************************************************************
+CC	= gcc
 CFLAGS	= -fPIC -Wall -DDEBUG -O3 -s -D_FILE_OFFSET_BITS=64
 CFLAGS	= -fPIC -Wall -DDEV -DDEBUG -D_FILE_OFFSET_BITS=64 -pg -g
 CFLAGS	= -fPIC -Wall -DDEBUG -pg -g
@@ -73,7 +77,7 @@ OBJS	= ${SRCS:.c=.o}
 all:	${ALB} ${SLB} JvNTest IsamTest
 
 .o:
-	cc $(CFLAGS) -o $@ $< -l$(LIB)
+	$(CC) $(CFLAGS) -o $@ $< -l$(LIB)
 
 ${ALB}:	${OBJS} Makefile
 	${AR} srv $@ $?
