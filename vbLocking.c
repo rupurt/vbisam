@@ -7,11 +7,15 @@
  *	This module handles the locking on both the index and data files for the
  *	VBISAM library.
  * Version:
- *	$ID$
+ *	$Id: vbLocking.c,v 1.2 2003/12/22 04:42:14 trev_vb Exp $
  * Modification History:
  *	$Log: vbLocking.c,v $
- *	Revision 1.1  2003/12/20 20:11:19  trev_vb
- *	Initial revision
+ *	Revision 1.2  2003/12/22 04:42:14  trev_vb
+ *	TvB 21Dec2003 Changed name of environment var (Prep for future)
+ *	TvB 21Dec2003 Also, changed 'ID' cvs header to 'Id' (Duh on me!)
+ *	
+ *	Revision 1.1.1.1  2003/12/20 20:11:19  trev_vb
+ *	Init import
  *	
  */
 #include	"isinternal.h"
@@ -194,7 +198,7 @@ iVBExit (int iHandle)
 	// Free up any key/tree no longer wanted
 	if (iVBBufferLevel == -1)
 	{
-		pcEnviron = getenv ("VB_BUF_LVL");
+		pcEnviron = getenv ("VB_TREE_LEVEL");
 		if (pcEnviron)
 			iVBBufferLevel = atoi (pcEnviron);
 		else
