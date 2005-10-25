@@ -10,15 +10,22 @@
  *	within this module, it becomes easier to 'virtualize' the filesystem
  *	at a later date.
  * Version:
- *	$Id: vbLowLevel.c,v 1.11 2005/10/25 13:56:06 zbenjamin Exp $
+ *	$Id: vbLowLevel.c,v 1.12 2005/10/25 14:01:43 zbenjamin Exp $
  * Modification History:
  *	$Log: vbLowLevel.c,v $
- *	Revision 1.11  2005/10/25 13:56:06  zbenjamin
- *	Added WIN32 Support
+ *	Revision 1.12  2005/10/25 14:01:43  zbenjamin
+ *	Fix for WIN32 Support
  *	
  *
- *  Revision 1.11  2005/10/25 14:54   zbenjamin
- *  25Oct2005  zBenjamin Added Win32 Compatibility
+ *      Revision 1.12  2005/10/25 15:59   zbenjamin
+ *      25Oct2005  zBenjamin OOps forgot a final #endif 
+ *  	
+ *      Revision 1.11  2005/10/25 13:56:06  zbenjamin
+ *	Added WIN32 Support
+ *	   
+ *
+ *      Revision 1.11  2005/10/25 14:54   zbenjamin
+ *      25Oct2005  zBenjamin Added Win32 Compatibility
  *
  *	Revision 1.10  2004/06/22 09:54:27  trev_vb
  *	22June2004 TvB Ooops, I put some code in iVBLock BEFORE the var declarations
@@ -177,6 +184,7 @@ iVBClose (int iHandle)
 		return (close (sVBFile [iHandle].iHandle));
 		#else
 		return (_close (sVBFile [iHandle].iHandle));
+		#endif
 	return (0);
 }
 

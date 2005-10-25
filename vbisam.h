@@ -8,9 +8,12 @@
  *	This is the header that defines all the various structures et al for
  *	the VBISAM library.
  * Version:
- *	$Id: vbisam.h,v 1.8 2005/10/25 13:56:06 zbenjamin Exp $
+ *	$Id: vbisam.h,v 1.9 2005/10/25 14:01:43 zbenjamin Exp $
  * Modification History:
  *	$Log: vbisam.h,v $
+ *	Revision 1.9  2005/10/25 14:01:43  zbenjamin
+ *	Fix for WIN32 Support
+ *	
  *	Revision 1.8  2005/10/25 13:56:06  zbenjamin
  *	Added WIN32 Support
  *	
@@ -151,6 +154,7 @@ typedef long off_t;
 typedef long ssize_t;
 typedef int pid_t;
 typedef unsigned short mode_t;
+typedef int uid_t;
 #endif
 
 struct	keypart
