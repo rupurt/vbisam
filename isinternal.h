@@ -8,9 +8,12 @@
  *	This is the header that defines the internally used structures for the
  *	VBISAM library.
  * Version:
- *	$Id: isinternal.h,v 1.13 2004/06/22 09:43:22 trev_vb Exp $
+ *	$Id: isinternal.h,v 1.14 2005/10/25 13:56:06 zbenjamin Exp $
  * Modification History:
  *	$Log: isinternal.h,v $
+ *	Revision 1.14  2005/10/25 13:56:06  zbenjamin
+ *	Added WIN32 Support
+ *	
  *	Revision 1.13  2004/06/22 09:43:22  trev_vb
  *	22June2004 TvB Purely changes to handle the isrecover mode selection
  *	
@@ -62,12 +65,16 @@
 #include	<sys/types.h>
 #include	<sys/stat.h>
 #include	<fcntl.h>
-#include	<unistd.h>
 #include	<stdlib.h>
 #include	<string.h>
 #include	<errno.h>
 #include	<limits.h>
 #include	<float.h>
+
+#ifndef WIN32
+#include	<unistd.h>
+#endif
+
 #define	VBISAM_LIB
 #include	"vbisam.h"
 

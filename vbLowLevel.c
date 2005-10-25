@@ -10,9 +10,16 @@
  *	within this module, it becomes easier to 'virtualize' the filesystem
  *	at a later date.
  * Version:
- *	$Id: vbLowLevel.c,v 1.10 2004/06/22 09:54:27 trev_vb Exp $
+ *	$Id: vbLowLevel.c,v 1.11 2005/10/25 13:56:06 zbenjamin Exp $
  * Modification History:
  *	$Log: vbLowLevel.c,v $
+ *	Revision 1.11  2005/10/25 13:56:06  zbenjamin
+ *	Added WIN32 Support
+ *	
+ *
+ *  Revision 1.11  2005/10/25 14:54   zbenjamin
+ *  25Oct2005  zBenjamin Added Win32 Compatibility
+ *
  *	Revision 1.10  2004/06/22 09:54:27  trev_vb
  *	22June2004 TvB Ooops, I put some code in iVBLock BEFORE the var declarations
  *	
@@ -89,6 +96,10 @@ iVBOpen (char *pcFilename, int iFlags, mode_t tMode)
 	int	iLoop;
 	struct	stat
 		sStat;
+	
+        #ifdef WIN32
+	iFlags = iFlags | O_BINARY;
+        #endif
 
 	if (!iInitialized)
 	{
@@ -101,6 +112,7 @@ iVBOpen (char *pcFilename, int iFlags, mode_t tMode)
 		if (!iFlags & O_CREAT)
 			return (-1);
 	}
+	#ifndef WIN32   //FIXME impelement this for Windows (there are no inodes on a windows system)
 	else
 	{
 		for (iLoop = 0; iLoop < VB_MAX_FILES * 3; iLoop++)
@@ -112,11 +124,16 @@ iVBOpen (char *pcFilename, int iFlags, mode_t tMode)
 			}
 		}
 	}
+	#endif
 	for (iLoop = 0; iLoop < VB_MAX_FILES * 3; iLoop++)
 	{
 		if (sVBFile [iLoop].iRefCount == 0)
 		{
-			sVBFile [iLoop].iHandle = open (pcFilename, iFlags, tMode);
+                        #ifndef WIN32
+                        sVBFile [iLoop].iHandle = open (pcFilename, iFlags, tMode);
+                        #else
+                        sVBFile [iLoop].iHandle = _open(pcFilename, iFlags, tMode);
+                        #endif
 			if (sVBFile [iLoop].iHandle == -1)
 				break;
 			if (iFlags & O_CREAT && iVBStat (pcFilename, &sStat))
@@ -156,7 +173,10 @@ iVBClose (int iHandle)
 	}
 	sVBFile [iHandle].iRefCount--;
 	if (!sVBFile [iHandle].iRefCount)
+	        #ifndef WIN32
 		return (close (sVBFile [iHandle].iHandle));
+		#else
+		return (_close (sVBFile [iHandle].iHandle));
 	return (0);
 }
 
@@ -191,7 +211,11 @@ tVBLseek (int iHandle, off_t tOffset, int iWhence)
 	}
 	if (sVBFile [iHandle].tPosn == tOffset && iWhence == SEEK_SET)
 		return (tOffset);	// Already there!
+        #ifndef WIN32
 	tNewOffset = lseek (sVBFile [iHandle].iHandle, tOffset, iWhence);
+        #else
+	tNewOffset = _lseek (sVBFile [iHandle].iHandle, tOffset, iWhence);
+        #endif
 	if (tNewOffset == tOffset && iWhence == SEEK_SET)
 		sVBFile [iHandle].tPosn = tNewOffset;
 	else
@@ -227,7 +251,11 @@ tVBRead (int iHandle, void *pvBuffer, size_t tCount)
 		errno = ENOENT;
 		return (-1);
 	}
+        #ifndef WIN32
 	tByteCount = read (sVBFile [iHandle].iHandle, pvBuffer, tCount);
+        #else
+	tByteCount = _read (sVBFile [iHandle].iHandle, pvBuffer, tCount);
+        #endif
 	if (tByteCount == tCount)
 		sVBFile [iHandle].tPosn += tByteCount;
 	else
@@ -263,7 +291,11 @@ tVBWrite (int iHandle, void *pvBuffer, size_t tCount)
 		errno = ENOENT;
 		return (-1);
 	}
+        #ifndef WIN32
 	tByteCount = write (sVBFile [iHandle].iHandle, pvBuffer, tCount);
+        #else
+	tByteCount = _write (sVBFile [iHandle].iHandle, pvBuffer, tCount);
+        #endif
 	if (tByteCount == tCount)
 		sVBFile [iHandle].tPosn += tByteCount;
 	else
@@ -295,6 +327,7 @@ tVBWrite (int iHandle, void *pvBuffer, size_t tCount)
  * Problems:
  *	NONE known
  */
+#ifndef WIN32
 int
 iVBLock (int iHandle, off_t tOffset, off_t tLength, int iMode)
 {
@@ -352,6 +385,83 @@ iVBLock (int iHandle, off_t tOffset, off_t tLength, int iMode)
 	}
 	return (iResult);
 }
+#else
+/**
+ * Implements the iVBLock functionality for WIN32
+ *
+ * Problems:
+ *      Better Error Handling should be implemented 
+ *      when FileLockEx or UnlockFileEx fails             
+ */
+int
+iVBLock (int iHandle, off_t tOffset, off_t tLength, int iMode)
+{
+	HANDLE tW32FileHandle;
+	OVERLAPPED tOverlapped;
+	DWORD tFlags;
+	BOOL bUnlock = FALSE;
+
+	if (!sVBFile [iHandle].iRefCount)
+	{
+		errno = ENOENT;
+		return (-1);
+	}
+
+	
+	tW32FileHandle = (HANDLE)_get_osfhandle(sVBFile [iHandle].iHandle);
+        if(tW32FileHandle == INVALID_HANDLE_VALUE)
+	{
+		errno = ENOENT;
+		return (-1);
+	}
+
+	switch (iMode)
+	{
+	case	VBUNLOCK:
+		bUnlock = TRUE;
+		break;
+
+	case	VBRDLOCK:
+		tFlags = LOCKFILE_FAIL_IMMEDIATELY;
+		break;
+
+	case	VBRDLCKW:
+		tFlags = 0;
+		break;
+
+	case	VBWRLOCK:
+		tFlags = LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY;
+		break;
+
+	case	VBWRLCKW:
+		tFlags = LOCKFILE_EXCLUSIVE_LOCK;
+		break;
+
+	default:
+		errno = EBADARG;
+		return (-1);
+	}
+
+	memset(&tOverlapped, '\0', sizeof(OVERLAPPED));
+	tOverlapped.Offset = tOffset;
+	if(!bUnlock)
+	{
+		/*FIXME insert error handling*/
+		if(LockFileEx(tW32FileHandle,tFlags, 0, tLength, 0, &tOverlapped))
+			return 0;
+	}
+	else
+	{
+		/*FIXME insert error handling*/
+		if(UnlockFileEx(tW32FileHandle, 0, tLength, 0, &tOverlapped))
+			return 0;
+	}
+
+	errno = EBADARG;
+	return (-1);
+}
+#endif
+
 
 /*
  * Name:
@@ -372,7 +482,11 @@ iVBLock (int iHandle, off_t tOffset, off_t tLength, int iMode)
 int
 iVBLink (char *pcOldFilename, char *pcNewFilename)
 {
-	return (link (pcOldFilename, pcNewFilename));
+        #ifndef WIN32
+        return (link (pcOldFilename, pcNewFilename));
+        #else
+	return(rename(pcOldFilename,pcNewFilename));
+        #endif
 }
 
 /*
@@ -392,7 +506,11 @@ iVBLink (char *pcOldFilename, char *pcNewFilename)
 int
 iVBUnlink (char *pcFilename)
 {
+        #ifndef WIN32
 	return (unlink (pcFilename));
+        #else
+	return (_unlink (pcFilename));
+        #endif
 }
 
 /*
@@ -416,3 +534,16 @@ iVBStat (char *pcFilename, struct stat *psStat)
 {
 	return (stat (pcFilename, psStat));
 }
+
+
+#ifdef WIN32
+/*
+ * Name:
+ *      int     getuid()
+ * simulates getuid for windows
+ */
+int getuid()
+{
+	return (1);
+}
+#endif

@@ -8,9 +8,12 @@
  *	This is the module that deals with all the reading from a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isread.c,v 1.8 2004/06/16 10:53:56 trev_vb Exp $
+ *	$Id: isread.c,v 1.9 2005/10/25 13:56:06 zbenjamin Exp $
  * Modification History:
  *	$Log: isread.c,v $
+ *	Revision 1.9  2005/10/25 13:56:06  zbenjamin
+ *	Added WIN32 Support
+ *	
  *	Revision 1.8  2004/06/16 10:53:56  trev_vb
  *	16June2004 TvB With about 150 lines of CHANGELOG entries, I am NOT gonna repeat
  *	16June2004 TvB them all HERE!  Go look yaself at the 1.03 CHANGELOG
@@ -335,7 +338,8 @@ ReadExit:
 int
 isstart (int iHandle, struct keydesc *psKeydesc, int iLength, char *pcRow, int iMode)
 {
-	char	cKeyValue [VB_MAX_KEYLEN];
+	char	cKeyValue [VB_MAX_KEYLEN],
+		cKeyValue2 [VB_MAX_KEYLEN];
 	int	iKeyNumber,
 		iResult = -1;
 	struct	VBKEY
@@ -349,6 +353,11 @@ isstart (int iHandle, struct keydesc *psKeydesc, int iLength, char *pcRow, int i
 	iResult = -1;
 	if (iKeyNumber == -1 && psKeydesc->iNParts)
 		goto StartExit;
+
+	// Make sure the passed length is 'valid'.
+	if (iLength < 1 || iLength > psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength)
+		iLength = psKeydesc->iKeyLength;
+
 	psVBFile [iHandle]->iActiveKey = iKeyNumber;
 	if (iMode & ISKEEPLOCK)
 		iMode -= ISKEEPLOCK;
@@ -391,7 +400,15 @@ isstart (int iHandle, struct keydesc *psKeydesc, int iLength, char *pcRow, int i
 		break;
 
 	case	ISEQUAL:
-		vVBMakeKey (iHandle, iKeyNumber, pcRow, cKeyValue);
+/*
+ * Editted the following line as it wasn't taking into account 'partial' keys
+ * when the length passed to isstart != 0
+ *		vVBMakeKey (iHandle, iKeyNumber, pcRow, cKeyValue);
+ */
+		vVBMakeKey (iHandle, iKeyNumber, pcRow, cKeyValue2);
+		memset (cKeyValue, 0, sizeof (cKeyValue));
+		memcpy (cKeyValue, cKeyValue2, iLength);
+// End edit
 		iResult = iVBKeySearch (iHandle, iMode & BYTEMASK, iKeyNumber, 0, cKeyValue, 0);
 		iserrno = EBADFILE;
 		if (iResult == -1)		// Error
@@ -400,7 +417,8 @@ isstart (int iHandle, struct keydesc *psKeydesc, int iLength, char *pcRow, int i
 		if (iResult == 1)
 			iResult = 0;
 		else
-			if (iResult == 0 && memcmp (cKeyValue, psVBFile [iHandle]->psKeyCurr [psVBFile [iHandle]->iActiveKey]->cKey, psVBFile [iHandle]->psKeydesc [psVBFile [iHandle]->iActiveKey]->iKeyLength))
+// Following line editted to ONLY check the amount of key specified.
+			if (iResult == 0 && memcmp (cKeyValue, psVBFile [iHandle]->psKeyCurr [psVBFile [iHandle]->iActiveKey]->cKey, iLength))
 			{
 				iserrno = ENOREC;
 				iResult = -1;
@@ -410,7 +428,9 @@ isstart (int iHandle, struct keydesc *psKeydesc, int iLength, char *pcRow, int i
 	case	ISGREAT:
 	case	ISGTEQ:
 		psVBFile [iHandle]->sFlags.iIsDisjoint = 1;
-		vVBMakeKey (iHandle, iKeyNumber, pcRow, cKeyValue);
+		vVBMakeKey (iHandle, iKeyNumber, pcRow, cKeyValue2);
+		memset (cKeyValue, 0, sizeof (cKeyValue));
+		memcpy (cKeyValue, cKeyValue2, iLength);
 		iResult = iVBKeySearch (iHandle, iMode & BYTEMASK, iKeyNumber, 0, cKeyValue, 0);
 		if (iResult < 0)		// Error is always error
 			break;

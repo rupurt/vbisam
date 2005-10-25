@@ -8,9 +8,16 @@
  *	This is the header that defines all the various structures et al for
  *	the VBISAM library.
  * Version:
- *	$Id: vbisam.h,v 1.7 2004/06/11 22:16:16 trev_vb Exp $
+ *	$Id: vbisam.h,v 1.8 2005/10/25 13:56:06 zbenjamin Exp $
  * Modification History:
  *	$Log: vbisam.h,v $
+ *	Revision 1.8  2005/10/25 13:56:06  zbenjamin
+ *	Added WIN32 Support
+ *	
+ *
+ *  Revision 1.8  2005/10/25 14:47 
+ *  25Oct2005 zbenjamin. Support for WIN32
+ *
  *	Revision 1.7  2004/06/11 22:16:16  trev_vb
  *	11Jun2004 TvB As always, see the CHANGELOG for details. This is an interim
  *	checkin that will not be immediately made into a release.
@@ -40,12 +47,18 @@
 #include	<sys/types.h>
 #include	<sys/stat.h>
 #include	<fcntl.h>
-#include	<unistd.h>
 #include	<stdlib.h>
 #include	<string.h>
 #include	<errno.h>
 #include	<limits.h>
 #include	<float.h>
+
+#ifndef WIN32
+#include	<unistd.h>
+#else
+#include <io.h>
+#include <windows.h>
+#endif
 
 #ifndef	VBISAM_INCL	// avoid multiple include problems
 #define	VBISAM_INCL
@@ -131,6 +144,15 @@
 # define	k_len		iKeyLength
 # define	k_rootnode	tRootNode
 #endif	// VBISAM_LIB
+
+// define unix types for winblows
+#ifdef WIN32
+typedef long off_t;
+typedef long ssize_t;
+typedef int pid_t;
+typedef unsigned short mode_t;
+#endif
+
 struct	keypart
 {
 	short	kp_start,	// Starting byte of key part
