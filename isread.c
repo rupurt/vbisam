@@ -8,9 +8,12 @@
  *	This is the module that deals with all the reading from a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isread.c,v 1.10 2006/03/02 11:33:53 zbenjamin Exp $
+ *	$Id: isread.c,v 1.11 2006/03/02 13:02:23 zbenjamin Exp $
  * Modification History:
  *	$Log: isread.c,v $
+ *	Revision 1.11  2006/03/02 13:02:23  zbenjamin
+ *	moved recalculation of keylength from isstart to iVBCheckKey
+ *	
  *	Revision 1.10  2006/03/02 11:33:53  zbenjamin
  *	isstart now
  *	calculates keylength automatically if it is 0 in keydesc and there is no keylength
@@ -361,13 +364,8 @@ isstart (int iHandle, struct keydesc *psKeydesc, int iLength, char *pcRow, int i
 
 	// Make sure the passed length is 'valid'.
 	if (iLength < 1 || iLength > psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength)
-	{
 		iLength = psKeydesc->iKeyLength;
-		//Make sure psKeydesc->iKeyLength is 'valid'.
-		if(iLength < 1)
-			for(iLoop = 0;iLoop < psKeydesc->k_nparts;iLoop++)
-				iLength+=psKeydesc->k_part[iLoop].kp_leng;
-	}
+		
 	psVBFile [iHandle]->iActiveKey = iKeyNumber;
 	if (iMode & ISKEEPLOCK)
 		iMode -= ISKEEPLOCK;
@@ -506,7 +504,8 @@ iVBCheckKey (int iHandle, struct keydesc *psKey, int iMode, int iRowLength, int 
 {
 	int	iLoop,
 		iPart,
-		iType;
+		iType,
+		iLocalKeyLength;
 	struct	keydesc
 		*psLocalKey;
 
@@ -578,6 +577,7 @@ iVBCheckKey (int iHandle, struct keydesc *psKey, int iMode, int iRowLength, int 
 		psLocalKey = psVBFile [iHandle]->psKeydesc [iLoop];
 		if (psLocalKey->iNParts != psKey->iNParts)
 			continue;
+		iLocalKeyLength = 0;
 		for (iPart = 0; iPart < psLocalKey->iNParts; iPart++)
 		{
 			if (psLocalKey->sPart [iPart].iStart != psKey->sPart [iPart].iStart)
@@ -586,9 +586,13 @@ iVBCheckKey (int iHandle, struct keydesc *psKey, int iMode, int iRowLength, int 
 				break;
 			if (psLocalKey->sPart [iPart].iType != psKey->sPart [iPart].iType)
 				break;
+			iLocalKeyLength+=psKey->sPart [iPart].iLength;
 		}
 		if (iPart == psLocalKey->iNParts)
+		{
+			psKey->iKeyLength = iLocalKeyLength;
 			break;		/* found */
+		}
 	}
 	if (iLoop == psVBFile [iHandle]->iNKeys)
 	{
