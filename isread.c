@@ -8,9 +8,14 @@
  *	This is the module that deals with all the reading from a file in the
  *	VBISAM library.
  * Version:
- *	$Id: isread.c,v 1.9 2005/10/25 13:56:06 zbenjamin Exp $
+ *	$Id: isread.c,v 1.10 2006/03/02 11:33:53 zbenjamin Exp $
  * Modification History:
  *	$Log: isread.c,v $
+ *	Revision 1.10  2006/03/02 11:33:53  zbenjamin
+ *	isstart now
+ *	calculates keylength automatically if it is 0 in keydesc and there is no keylength
+ *	passed to isstart (cisam kompatibility)
+ *	
  *	Revision 1.9  2005/10/25 13:56:06  zbenjamin
  *	Added WIN32 Support
  *	
@@ -356,8 +361,13 @@ isstart (int iHandle, struct keydesc *psKeydesc, int iLength, char *pcRow, int i
 
 	// Make sure the passed length is 'valid'.
 	if (iLength < 1 || iLength > psVBFile [iHandle]->psKeydesc [iKeyNumber]->iKeyLength)
+	{
 		iLength = psKeydesc->iKeyLength;
-
+		//Make sure psKeydesc->iKeyLength is 'valid'.
+		if(iLength < 1)
+			for(iLoop = 0;iLoop < psKeydesc->k_nparts;iLoop++)
+				iLength+=psKeydesc->k_part[iLoop].kp_leng;
+	}
 	psVBFile [iHandle]->iActiveKey = iKeyNumber;
 	if (iMode & ISKEEPLOCK)
 		iMode -= ISKEEPLOCK;
