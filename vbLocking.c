@@ -8,9 +8,12 @@
  *	This module handles the locking on both the index and data files for the
  *	VBISAM library.
  * Version:
- *	$Id: vbLocking.c,v 1.10 2004/06/22 09:53:28 trev_vb Exp $
+ *	$Id: vbLocking.c,v 1.11 2006/03/03 09:53:29 zbenjamin Exp $
  * Modification History:
  *	$Log: vbLocking.c,v $
+ *	Revision 1.11  2006/03/03 09:53:29  zbenjamin
+ *	*Fixed* iVbEnter doesn´t check if a handle is valid before accessing it the first time
+ *	
  *	Revision 1.10  2004/06/22 09:53:28  trev_vb
  *	22June2004 TvB Various changes to better deal with multiple concurrent
  *	22June2004 TvB processes accessing the same table
@@ -117,12 +120,17 @@ iVBEnter (int iHandle, int iModifying)
 		iLoop,
 		iResult;
 	off_t	tLength;
-
+	
+	if (!psVBFile [iHandle])
+	{
+		iserrno = ENOTOPEN;
+		return (-1);
+	}
 	for (iLoop = 0; iLoop < MAXSUBS; iLoop++)
 		if (psVBFile [iHandle]->psKeyCurr [iLoop] && psVBFile [iHandle]->psKeyCurr [iLoop]->tRowNode == -1)
 			psVBFile [iHandle]->psKeyCurr [iLoop] = VBKEY_NULL;
 	iserrno = 0;
-	if (!psVBFile [iHandle] || (psVBFile [iHandle]->iIsOpen && iVBInTrans != VBCOMMIT && iVBInTrans != VBROLLBACK))
+	if (psVBFile [iHandle]->iIsOpen && iVBInTrans != VBCOMMIT && iVBInTrans != VBROLLBACK)
 	{
 		iserrno = ENOTOPEN;
 		return (-1);
